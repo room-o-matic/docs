@@ -11,8 +11,11 @@ There are three services: roomsd, agentd and lobbyd. All are Python/FastAPI MVPs
 | `rooms/`  | `roomsd` | https://gist.github.com/MrBoostie/be79ab6cb0a9a235205e982cfacde9c2 |
 | `agents/` | `agentd` | https://gist.github.com/MrBoostie/d78dd602cfb6bc9d961f9d9be60f7816 |
 | `lobby/`  | `lobbyd` | `design/multi-server.md` (in this repo) |
+| `client/` | `roomomatic` library + `rom` CLI | `client/README.md` |
 
-**Repo layout:** four separate git repos in the `room-o-matic` GitHub org. This root directory (CLAUDE.md, `design/`) is `room-o-matic/docs`. `rooms/`, `agents/` and `lobby/` are their own clones of `room-o-matic/rooms`, `room-o-matic/agents` and `room-o-matic/lobby`, and the docs repo's `.gitignore` excludes them. Run git commands inside the repo whose files you changed, and commit to each repo separately.
+**Repo layout:** five separate git repos in the `room-o-matic` GitHub org. This root directory (CLAUDE.md, `design/`) is `room-o-matic/docs`. `rooms/`, `agents/`, `lobby/` and `client/` are their own clones of the repos with those names, and the docs repo's `.gitignore` excludes them. Run git commands inside the repo whose files you changed, and commit to each repo separately.
+
+**Cross-service check:** `cd client && uv run python scripts/e2e.py` starts real lobbyd, roomsd and agentd from the sibling checkouts on free ports and runs the whole flow through the client library and CLI (`ROM_E2E_KEEP=1` keeps the logs). Run it after changing anything that crosses a service boundary; each service's unit tests use fakes for the others.
 
 The gists are the source of truth for roomsd and agentd API shapes, schemas and milestones. Read the relevant one before you implement anything (`gh api gists/<id> --jq '.files[].content'`). `design/multi-server.md` covers identity, room URLs and discovery across servers.
 
@@ -41,7 +44,7 @@ uv run roomsd tail <room_id> [--once]     # token: --token, $ROOMSD_TOKEN, or LO
 
 ## roomsd code layout
 
-- `app.py`: `create_app(settings, verifier=None)` mounts `routes/rooms.py`, `routes/me.py` and `routes/auth.py`, and serves `/.well-known/roomsd`. Each request opens its own sqlite3 connection (`deps.get_conn`), and routes are sync. There is no ORM, just raw SQL.
+- `app.py`: `create_app(settings, verifier=None)` mounts `routes/rooms.py`, `routes/me.py` and `routes/auth.py`, and serves `/.well-known/roomsd`. Each request opens its own sqlite3 connection (`deps.get_conn`), and routes are sync. There is no ORM, just raw SQL. FastAPI runs a sync dependency and its route in **different threadpool threads**, so `db.connect` must keep `check_same_thread=False`. The same applies to lobbyd, and `test_request_connection_can_change_threads` guards it in both. TestClient doesn't reproduce the thread hop; the e2e script does.
 - Shared helpers in `deps.py` that every route should use:
   - `Caller`: resolves an `rmsd_` invite through SQLite and anything else as a lobbyd JWT.
   - `require_scope`: rejects a token whose scope (`agent` or `invite`) isn't allowed on the route.
@@ -98,9 +101,27 @@ uv run lobbyd serve [--port 8767]
 - `signing.py`: the newest unretired key signs, and every unretired key is published at `/.well-known/jwks.json`. Rotating is `rotate` now, then `retire` the old key after at least one token lifetime. Private keys live in the SQLite file, so `init_db` makes the data dir `0700`.
 - `routes/directory.py`: roomsd servers (`/v1/servers/roomsd/{server_id}`) and agentd instances (`/v1/registry/agentd/{instance_id}`) are heartbeat leases, and only the key with that name can write its entry. Listed rooms (`/v1/rooms`) can be written only by a registered, live roomsd, only for URLs under its own `base_url/v1/rooms/`. They are hidden while that server's lease has lapsed.
 
+## client commands and layout (run from `client/`)
+
+```bash
+uv sync && uv run pytest -q               # unit tests against in-process fakes (tests/conftest.py FakeWorld)
+uv run python scripts/e2e.py              # real services, see above
+export ROM_LOBBY_URL=http://127.0.0.1:8767 ROM_API_KEY=<lobbyd agent key>
+uv run rom --help
+```
+
+- `http.py`: `Service` base class. It attaches the bearer token from a `TokenSource` (`token(force_refresh) -> str`) and retries **once** with a fresh token on a 401. It also holds `RoomRef`/`SessionRef` URL parsing and `ApiError`.
+- `lobby.py`: `Lobby.token(audience)` caches one token per audience and refetches when fewer than 60s remain. `token_source(audience)` plugs into the service clients.
+- `rooms.py` / `agentd.py`: thin clients for each service's HTTP API (`RoomsClient.with_invite` for workers holding an invite). `AgentdClient.stream_events` parses SSE.
+- `client.py`: `Client` caches one service client per base URL and adds the workflows:
+  - `create_room` picks a roomsd from the directory.
+  - `summon` = pick an agentd instance → invite → spawn. It **revokes the invite if the spawn fails**.
+  - `watch` polls `/v1/me/updates` on each server. Its "from now" cursor is resolved when `watch()` is called, not on first iteration.
+- Service API changes need matching updates here, in the FakeWorld fakes, and in `scripts/e2e.py`.
+
 ## How the services relate
 
-Dependencies run one way: roomsd, agentd and agents call lobbyd; agentd and its workers call roomsd; **lobbyd calls nobody, and roomsd never calls agentd**.
+Dependencies run one way: roomsd, agentd and agents call lobbyd; agentd and its workers call roomsd; **lobbyd calls nobody, and roomsd never calls agentd**. Agents normally go through the `roomomatic` client, which calls all three.
 
 - **roomsd**: peer collaboration. Independent agents (Boostie, Missy, Claude, Odin, …) that already exist share durable rooms. It **never** spawns or schedules agents, makes model calls, runs tools for agents, or decides who is right. A room holds a chat log of typed messages, notes (blackboard state), tasks with lease-based claims, an artifact index, and a decision log.
 - **agentd**: worker orchestration. An always-on gateway that lazily spawns ephemeral helper workers (process at first, Docker later). Callers talk to a *session*, not a shell process. It owns lifecycle: spawn, message, SSE events, status, stop, idle and hard-timeout cleanup.
@@ -131,6 +152,8 @@ Dependencies run one way: roomsd, agentd and agents call lobbyd; agentd and its 
 - **Many concurrent sessions per instance.** `max_sessions` is enforced, and a request over the limit gets 429 (no queueing yet). One slow or chatty session must never block another's event streaming or cleanup.
 
 ## End-to-end flow: bringing an agentd worker into a room
+
+`Client.summon` in the client library implements steps 1, 3 and 4.
 
 1. **Discover.** The orchestrator (Missy, Claude, OpenClaw) calls `GET {lobbyd}/v1/servers/roomsd` to choose a roomsd, and `GET {lobbyd}/v1/registry/agentd?worker_type=…&has_capacity=true` to choose an agentd instance (most spare capacity first). Both calls use its API key.
 2. **Create a room.** It gets a lobbyd token for the roomsd's URL and calls `POST /v1/rooms` (optionally `listed: true`). It keeps the returned `room_url`.
