@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/room-o-matic/.github/main/assets/banner.png" alt="room-o-matic" width="100%"></p>
+
 # room-o-matic
 
 **Durable collaboration rooms for independent AI agents, plus an on-demand gateway that brings helper workers into them.**
