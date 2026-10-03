@@ -4,14 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Both services are Python/FastAPI MVPs managed with uv, and both use the same conventions (src layout, raw sqlite3, ruff, pytest, the same token CLI). The two directories implement two separate design specs:
+All three services (roomsd, agentd and lobbyd) are Python/FastAPI MVPs managed with uv, and they share the same conventions (src layout, raw sqlite3, ruff, pytest, the same key/token CLI). The two directories implement two separate design specs:
 
 | Dir       | Service  | Spec |
 |-----------|----------|------|
 | `rooms/`  | `roomsd` | https://gist.github.com/MrBoostie/be79ab6cb0a9a235205e982cfacde9c2 |
 | `agents/` | `agentd` | https://gist.github.com/MrBoostie/d78dd602cfb6bc9d961f9d9be60f7816 |
+| `lobby/` | `lobbyd` | `design/multi-server.md` (in this repo) |
 
-**Repo layout:** three separate git repos in the `room-o-matic` GitHub org. This root directory (CLAUDE.md and cross-service docs) is `room-o-matic/docs`. `rooms/` and `agents/` are their own clones of `room-o-matic/rooms` and `room-o-matic/agents`, and the docs repo's `.gitignore` excludes them. Run git commands inside the repo whose files you changed, and commit to each repo separately.
+**Repo layout:** three separate git repos in the `room-o-matic` GitHub org. This root directory (CLAUDE.md and cross-service docs) is `room-o-matic/docs`. `rooms/`, `agents/` and `lobby/` are their own clones of `room-o-matic/rooms`, `room-o-matic/agents` and `room-o-matic/lobby`, and the docs repo's `.gitignore` excludes them. Run git commands inside the repo whose files you changed, and commit to each repo separately.
 
 The gists are the source of truth for the API shapes, schemas, and milestones. Read the relevant one before you implement anything (`gh api gists/<id> --jq '.files[].content'`).
 
@@ -114,9 +115,25 @@ Plan for many agentd deployments from the start, even while the MVP stays small.
 - **Many worker types** (Codex, Claude, OpenClaw, wrapped scripts). Put workers behind a pluggable backend interface selected by `worker_type`. Keep this separate from profiles, which control permissions, and from the runner, which is a process or Docker. "One worker type first" is only MVP ordering; don't hard-code anything specific to one worker type in the gateway.
 - **Many concurrent sessions per instance.** Enforce per-instance limits on how many sessions run at once and on resources, and reject or queue requests over the limit with a clear status. One slow or chatty session must never block another's event streaming or cleanup.
 
-## Planned: multiple roomsd servers (see `design/multi-server.md`)
+## lobbyd: identity and directory (see `design/multi-server.md`)
 
-Proposed and not yet built: a third service, **lobbyd**, becomes the identity issuer (short-lived JWTs for `name@domain` identities, each restricted to one server) and the directory (roomsd servers, the agentd registry and listed rooms). The registry and per-service agent tokens described below are set to **move to lobbyd**. Rooms will be addressed by full URL. Read the design doc before changing auth or the registry.
+lobbyd is built. **roomsd and agentd don't use it yet**: they still have their own token tables, and the agentd registry still lives in roomsd. Migrating them is the next step, and the "Changes to existing code" section of the design doc lists what it involves. Read that doc before changing auth or the registry.
+
+Commands (run from `lobby/`; default port 8767):
+
+```bash
+uv sync && uv run pytest -q
+export LOBBYD_DATA_DIR=.data LOBBYD_ISSUER=http://127.0.0.1:8767 LOBBYD_DOMAIN=local
+uv run lobbyd key create <name> [--scope agent|agentd|roomsd]   # long-lived API key
+uv run lobbyd signing-key list|rotate|retire <kid>
+uv run lobbyd serve
+```
+
+Layout and rules:
+- `POST /v1/token {audience}`, called with an API key, returns an EdDSA JWT. Its claims are `iss`=`LOBBYD_ISSUER`, `sub`=`name@domain`, `aud`=the target service's base URL, `scope`, and `exp` (default 15 minutes). lobbyd's own endpoints accept the **API key directly**, not access tokens.
+- `signing.py`: the newest unretired key signs, and every unretired key is published at `/.well-known/jwks.json`. Rotating is `rotate` now, then `retire` the old key after at least one token lifetime. Private keys live in the SQLite file, so `init_db` makes the data dir `0700`.
+- `verify.py` (`TokenVerifier`) is **meant to be copied into roomsd and agentd**; it depends only on PyJWT and httpx. It checks `iss`, `aud`, `exp` and that `sub` belongs to the issuer's domain. It caches the JWKS and refetches on an unknown `kid`, at most once per `min_refresh_seconds`.
+- `routes/directory.py`: roomsd servers (`/v1/servers/roomsd/{server_id}`) and agentd instances (`/v1/registry/agentd/{instance_id}`) are heartbeat leases, and only the key with that name can write its entry. Listed rooms (`/v1/rooms`) can be written only by a registered, live roomsd, only for URLs under its own `base_url/v1/rooms/`. They are hidden while that server's lease has lapsed.
 
 ## Integration: roomsd as the agentd registry (owner decision, not in either gist)
 
