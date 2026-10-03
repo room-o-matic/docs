@@ -110,3 +110,7 @@ To report a vulnerability, see [SECURITY.md](https://github.com/room-o-matic/.gi
 ## Contributing
 
 Work is tracked as issues in this repo, and each fix lands as a PR in the affected repo or repos. See [CONTRIBUTING.md](https://github.com/room-o-matic/.github/blob/main/CONTRIBUTING.md).
+
+## License
+
+[Apache-2.0](LICENSE), across all room-o-matic repositories.

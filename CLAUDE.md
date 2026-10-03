@@ -6,11 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 There are three services: roomsd, agentd and lobbyd. All are Python/FastAPI MVPs managed with uv, and they share the same conventions (src layout, raw sqlite3, ruff, pytest). lobbyd issues identities and runs the directory, and roomsd and agentd both depend on it.
 
-| Dir       | Service  | Spec |
+| Dir       | Service  | Docs |
 |-----------|----------|------|
-| `rooms/`  | `roomsd` | https://gist.github.com/MrBoostie/be79ab6cb0a9a235205e982cfacde9c2 |
-| `agents/` | `agentd` | https://gist.github.com/MrBoostie/d78dd602cfb6bc9d961f9d9be60f7816 |
-| `lobby/`  | `lobbyd` | `design/multi-server.md` (in this repo) |
+| `rooms/`  | `roomsd` | `rooms/README.md` |
+| `agents/` | `agentd` | `agents/README.md` |
+| `lobby/`  | `lobbyd` | `lobby/README.md`, `design/multi-server.md` |
 | `client/` | `roomomatic` library + `rom` CLI | `client/README.md` |
 
 **Repo layout:** five separate git repos in the `room-o-matic` GitHub org. This root directory (CLAUDE.md, `design/`) is `room-o-matic/docs`. `rooms/`, `agents/`, `lobby/` and `client/` are their own clones of the repos with those names, and the docs repo's `.gitignore` excludes them. Run git commands inside the repo whose files you changed, and commit to each repo separately.
@@ -21,7 +21,7 @@ There are three services: roomsd, agentd and lobbyd. All are Python/FastAPI MVPs
 
 **Operations:** `design/operations.md` covers schema upgrades, backups, restore and its invalidation rules, `/readyz`, `/metrics`, and drills. `ops.py` is identical in lobby, rooms and agents (as is `verify.py`, apart from its header): change one, copy it to the others.
 
-The gists are the source of truth for roomsd and agentd API shapes, schemas and milestones. Read the relevant one before you implement anything (`gh api gists/<id> --jq '.files[].content'`). `design/multi-server.md` covers identity, room URLs and discovery across servers.
+roomsd and agentd began from two private design specs that are not published. The implemented behavior is documented in each repo's README, in this file, and in `design/`, and the code and tests are authoritative. `design/multi-server.md` covers identity, room URLs and discovery across servers.
 
 > **Trusted single-operator quickstart only.** Defaults (keys in the `internal` tenant, `open` rooms, `trusted` agentd callers on the process backend) are not suitable for untrusted or public traffic. Before admitting third parties:
 > - give each of them its own lobbyd tenant;
@@ -221,7 +221,7 @@ Dependencies run one way: roomsd, agentd and agents call lobbyd; agentd and its 
 - Task claims are leases: one active claim at a time, and a claim can be replaced once it expires.
 - Artifacts are copied or registered into `/var/lib/roomsd/rooms/<id>/artifacts/`. Never serve arbitrary filesystem paths. Enforce max message and artifact sizes.
 - Roles (chair, implementer, reviewer, …) are advisory and not enforced in v1.
-- Gist MVP is done. Next from the gist: tasks, artifacts, decisions, SSE, per-room permissions.
+- The MVP is done, including tasks (docs#12) and per-room rights (docs#10). Next: artifacts, a decision log, and SSE.
 
 ## agentd: key invariants
 
@@ -231,7 +231,7 @@ Dependencies run one way: roomsd, agentd and agents call lobbyd; agentd and its 
 - Security: workspace path allowlist, no arbitrary host mounts, env-var allowlist, no inherited secrets. Docker workers run non-root, read-only workspace unless the profile grants write, CPU/memory limits, no privileged mode, no Docker socket.
 - Failure handling: mark the session failed with a clear event rather than leaving it looking "still thinking". This covers invalid worker JSON, a worker that never becomes ready, artifact path escapes, a gateway restart with live sessions, and concurrent senders.
 
-## agentd: scale requirements (from the owner, not in the gist)
+## agentd: scale requirements (from the owner)
 
 - **Many agentd instances** (e.g. one per host). Each has a stable `instance_id` (also its lobbyd key name) and globally unique session IDs (`agt_<ULID>`), and keeps its own SQLite and `/var/lib/agentd`; don't assume shared storage. Callers find instances in the lobbyd registry.
 - **Many worker types.** Workers sit behind config-defined `worker_types`, kept separate from profiles (permissions) and from the runner (process or Docker). Don't hard-code anything specific to one worker type in the gateway.
