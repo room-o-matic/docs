@@ -84,7 +84,12 @@ A snapshot is older than the service it replaces. Before the service starts serv
 - **Directory leases are dropped:** roomsd servers, agentd instances, listed rooms and peers. Services re-register within a third of their TTL, and roomsd republishes its listings because its `registration_id` changes (docs#19).
 - **Offers:** offers still in `offered` are expired, so an offer already answered isn't delivered again. Accepted and in-progress offers are kept.
 - **Audit IDs** jump by the ID gap.
-- **Not restored:** rate-limit state is in memory.
+- **Budgets can't be over-spent after a restore.** There is no cumulative spend counter anywhere to roll back:
+  - lobbyd's per-tenant budgets (peers per agent, open offers per requester, listings per server) are counted from live rows, and a restore only lowers them, since it drops leases and expires offers.
+  - The per-key token rate limiter is in memory and starts empty after any restart.
+  - agentd's `max_budget_usd` caps each session, not a running total.
+
+  If a cumulative quota is ever added, journal its usage the same way revocations are journaled, and replay it on restore.
 
 **roomsd**
 
