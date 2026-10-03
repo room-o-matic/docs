@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-roomsd has an MVP in Python/FastAPI. agentd has not been started. The two directories implement two separate design specs:
+Both services are Python/FastAPI MVPs managed with uv, and both use the same conventions (src layout, raw sqlite3, ruff, pytest, the same token CLI). The two directories implement two separate design specs:
 
 | Dir       | Service  | Spec |
 |-----------|----------|------|
@@ -52,6 +52,33 @@ uv run roomsd tail <room_id> --token ... [--once]   # or set ROOMSD_TOKEN / ROOM
 - Tests use FastAPI's `TestClient` against a temporary database. The fixtures in `tests/conftest.py` (`make_agent(name, scope)`, `boostie`, `missy`, `agentd1`, `room_id`) issue real tokens. To test expiry, set `expires_at` in the past directly in SQL.
 - MVP access rules: any `agent`-scope token can join any room, and an invite can join only its own room. Every other room route requires being a participant. Per-room permissions come later.
 
+## agentd commands (run from `agents/`)
+
+```bash
+uv sync && uv run pytest -q               # about 10s; tests start real fake-worker subprocesses
+uv run pytest tests/test_sessions.py::test_stop_escalates_to_kill
+uv run ruff check . && uv run ruff format .
+
+export AGENTD_CONFIG=agentd.example.yaml AGENTD_DATA_DIR=.data   # all keys: config.Settings
+uv run agentd config                      # print the effective config (YAML plus AGENTD_* env)
+uv run agentd token create <caller>       # caller bearer token (agentd has its own token DB)
+uv run agentd serve [--port 8765]
+```
+
+Milestone 1 check: `curl -XPOST localhost:8765/v1/sessions -H "Authorization: Bearer $T" -H 'content-type: application/json' -d '{"task":"say hello","profile":"workspace_coder","worker_type":"fake"}'`, then `curl -N localhost:8765/v1/sessions/<id>/events -H "Authorization: Bearer $T"`. The first word of the task picks the fake worker's mode (`interactive`, `hang`, `crash`, `stubborn`, …); see `workers/fake.py`.
+
+## agentd code layout
+
+- `supervisor.py` is the core. Each live session has one `_run` task that owns the worker process: it reads stdout and stderr, then waits for exit. **`_run` is the only place a session that started becomes terminal.** `stop()`, the ready watchdog and the cleanup loop only record a `stop_status` and signal the process; `_run` then applies `final_seen` → completed, else `stop_status`, else failed. `_set_terminal` is also called directly for sessions that never got a live process: those whose worker failed to launch, and those `recover()` finds left over from a previous gateway process.
+- Everything runs on the event loop thread with one shared sqlite3 connection, so **all routes are `async def`**. A sync route would run in a threadpool and share the connection across threads.
+- `protocol.py` defines the stdin and stdout protocol. Workers may emit only `progress`, `artifact`, `needs_input`, `final` and `error`. The gateway reserves `status`, `log`, `message`, `protocol_error`, `room_error` and `log_truncated`.
+- `events.py` (`EventStore`) writes every event to SQLite and to `events.jsonl`, then wakes SSE readers. The SSE loop relies on there being no `await` between an empty `since()` and `wait()`; keep it that way.
+- `backends/process.py`: each worker runs as a subprocess in its own process group (`killpg`), with stop message → SIGTERM → SIGKILL spaced by `stop_grace_seconds`. This backend gives **no isolation**: profile fields other than the runtime limit and the workspace allowlist are only advisory until the Docker backend exists. A worker gets only the env vars in `env_allowlist` plus `AGENTD_*` and, when invited to a room, `ROOMSD_*`.
+- Worker types are pure config (`worker_types: {name: {command, env}}`). The built-in set has only `fake`. A real agent CLI needs an adapter that speaks the protocol (milestone 2).
+- `rooms_client.py`: the registry heartbeat runs every ttl/3 and also immediately when `Supervisor.capacity_changed` fires. The instance deregisters on shutdown. A room close-out joins, posts, then revokes the invite token.
+- Sessions are visible only to the caller that requested them; anyone else gets 404. The room invite token is never written to disk (it's redacted in `input.json`).
+- Tests (`tests/helpers.py`): `spawn`, `wait_status`, `events` (the JSON form of `/events`) and `wait_event`. The fixtures set short timeouts (ready 3s, grace 1s, cleanup every 0.2s) and `max_sessions=2`. The roomsd integration has no automated test yet; it was checked by hand against a live roomsd.
+
 ## How the two services relate
 
 They solve different problems. Dependencies run one way only: agentd and its workers are clients of roomsd, and roomsd never calls agentd (see "Integration" below).
@@ -94,9 +121,9 @@ roomsd acts as the registry of agentd instances. Orchestrating agents (Missy, Cl
 1. **Register.** The agentd instance, using its `agentd`-scope token, calls `PUT /v1/registry/agentd/{instance_id}` with `base_url`, `worker_types`, `profiles`, `max_sessions`, `active_sessions`, and optional `metadata` and `ttl_seconds` (default 60, max 600). Sending the same PUT again is the heartbeat; send it about every ttl/3. Entries past `expires_at` drop out of lookups. `DELETE` the entry on a clean shutdown.
 2. **Create a room.** The orchestrator calls `POST /v1/rooms`.
 3. **Pick an instance.** The orchestrator calls `GET /v1/registry/agentd?worker_type=…&profile=…&has_capacity=true`. Results come back sorted with the most spare capacity first.
-4. **Invite.** The orchestrator calls `POST /v1/rooms/{id}/invites` with `{name, role, ttl_seconds}` (default 1h, max 24h) and gets back a token whose identity is `<orchestrator>/<name>`. Name the worker after where it runs, e.g. `agentd-host1.codex`. The orchestrator then calls the instance's `POST /v1/sessions` with the roomsd URL, `room_id` and invite token. (That agentd side isn't built yet.)
+4. **Invite.** The orchestrator calls `POST /v1/rooms/{id}/invites` with `{name, role, ttl_seconds}` (default 1h, max 24h) and gets back a token whose identity is `<orchestrator>/<name>`. Name the worker after where it runs, e.g. `agentd-host1.codex`. The orchestrator then calls the instance's `POST /v1/sessions` with the roomsd URL, `room_id` and invite token. The spawn request carries `room: {room_id, token, url?}`, and `url` defaults to agentd's `roomsd_url`.
 5. **Join.** agentd hands the token to the worker through its allowlisted environment, never as a profile permission. The worker calls `POST /v1/rooms/{id}/participants`, and its role is fixed to the role on the invite. Its first message should be a `status` message naming `instance_id` and `session_id`.
-6. **Finish.** When the session ends for any reason, agentd posts a closing `status` or `handoff` message and then calls `POST /v1/auth/revoke` with the worker's token, so the token dies with the session. The inviter or the room creator can also revoke it with `DELETE /v1/rooms/{id}/invites/{invite_id}`. `GET /v1/auth/whoami` returns any token's identity, scope, room and expiry.
+6. **Finish.** When the session ends for any reason, agentd (`Supervisor._close_out_room`) posts a closing `status` or `handoff` message and then calls `POST /v1/auth/revoke` with the worker's token, so the token dies with the session. The inviter or the room creator can also revoke it with `DELETE /v1/rooms/{id}/invites/{invite_id}`. `GET /v1/auth/whoami` returns any token's identity, scope, room and expiry.
 
 Constraints this keeps:
 
