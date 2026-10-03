@@ -1,6 +1,6 @@
 # Multiple roomsd servers: identity, addressing and discovery
 
-Status: proposed
+Status: implemented for a single operator (lobbyd, roomsd and agentd migrated). Federation is not built.
 Decisions so far (owner): **start with one operator and federate later**, and put discovery in **a separate directory service**.
 
 ## Problem
