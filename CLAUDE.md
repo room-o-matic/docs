@@ -21,10 +21,28 @@ There are three services: roomsd, agentd and lobbyd. All are Python/FastAPI MVPs
 
 The gists are the source of truth for roomsd and agentd API shapes, schemas and milestones. Read the relevant one before you implement anything (`gh api gists/<id> --jq '.files[].content'`). `design/multi-server.md` covers identity, room URLs and discovery across servers.
 
+> **Trusted single-operator quickstart only.** Defaults (keys in the `internal` tenant, `open` rooms, `trusted` agentd callers on the process backend) are not suitable for untrusted or public traffic. Before admitting third parties:
+> - give each of them its own lobbyd tenant;
+> - default rooms to `closed` (`ROOMSD_DEFAULT_ADMISSION=closed`);
+> - grant agentd callers explicitly, and run any untrusted caller on `backend: sandbox`.
+
 ## Identity and auth (all services)
 
 - **lobbyd issues every identity**, in the form `name@domain`. Each agent holds a long-lived lobbyd API key (`lobbyd key create <name> --scope agent|agentd|roomsd`). It exchanges the key at `POST {lobbyd}/v1/token {"audience": "<service base_url>"}` for an EdDSA JWT that lasts 15 minutes. **The token is valid only at that one service** (`aud`), so each roomsd and agentd needs its own token.
 - roomsd and agentd check tokens locally with `verify.TokenVerifier`, which is **copied from `lobby/src/lobbyd/verify.py`**. Keep the copies identical; a header comment marks them. Each service's `base_url` is the `aud` it accepts, so `base_url` must be the exact URL callers use.
+- **The verifier's key cache** (docs#6):
+  - A known key never waits on the network; a stale cache refreshes in the background.
+  - An unknown `kid` gets one shared fetch, at most once per second.
+  - Failures back off exponentially.
+  - After `max_stale_seconds` without a successful fetch, verification fails closed.
+  - lobbyd publishes a new key before it signs: `signing-key rotate`, with `--now` for emergencies. `retire` waits until the key's last token has expired, unless `--force`.
+- **Tenants (docs#11):**
+  - **Every lobbyd key belongs to a tenant.** The built-in `internal` tenant is the operator's own.
+  - **Identity reservation:** the first key for a name reserves it for that tenant.
+  - **Service keys:** only `can_host` tenants may hold `roomsd` or `agentd` keys.
+  - **Visibility:** an approved endpoint belongs to its key's tenant. A tenant sees servers, instances and listed rooms only for its own endpoints, plus ones granted with `lobbyd tenant grant`. Peers and offers never cross tenants, and tokens carry a `tenant` claim.
+  - **Revocation:** `lobbyd key revoke-id <key_id>` revokes one credential, and disabling a tenant stops all its keys. Already-issued tokens stay valid until `exp`, at most 15 minutes, which is the documented grace.
+  - **Budgets** (rate limits, metadata size, listing, peer and offer counts) answer 413/422/429.
 - Only `agent`-scope tokens can call roomsd and agentd. `agentd`- and `roomsd`-scope keys are used only against lobbyd's directory, and lobbyd's own endpoints take the API key directly.
 - **Identity always comes from the token.** A body `from`, `created_by`, `agent`, `requester.agent` or `sender` may repeat it but never override it (`assert_identity`), and must use the full `name@domain` form.
 - roomsd room invites are a separate, local kind of token: opaque, prefixed `rmsd_`, valid in one room only, with the identity `<inviter identity>/<name>` (e.g. `missy@local/agentd-host1.codex`). Named identities never contain `/`, so an invite can't impersonate an agent. Invites are stored hashed in roomsd's `invites` table and never go through lobbyd.
@@ -65,7 +83,11 @@ uv run roomsd tail <room_id> [--once]     # token: --token, $ROOMSD_TOKEN, or LO
 - Listing: `listed`/`tags` are set on create or by the creator through `PATCH /v1/rooms/{id}`. `lobby_client.sync_loop` (started in the lifespan only when `ROOMSD_LOBBYD_API_KEY` is set) heartbeats the server into lobbyd every ttl/3. It also pushes any room whose `listing_version > listing_synced_version`. Routes bump `listing_version` and wake the loop through `app.state.lobby_wake`. Never write to lobbyd from a route.
 - `db.py`: tables are created with `create table if not exists` on startup, and there is no migration tool. A schema change means deleting the dev database.
 - `models.py`: the optional typed-message fields (`confidence`, `reply_requested`, `severity`, `based_on_messages`) are stored in `messages.payload_json`. To add one, list it in `PAYLOAD_FIELDS` and add it to both models.
-- MVP access rules: any agent can join any room, and an invite can join only its own room. Every other room route requires being a participant. Per-room permissions come later.
+- **Room admission and rights (docs#10):**
+  - **Admission is separate from listing:** rooms are `open` (self-join with `default_rights`) or `closed` (an admin must grant access). The server default is `ROOMSD_DEFAULT_ADMISSION`.
+  - **Rights:** named agents hold explicit `read`, `write`, `invite` and `admin` rights in the `members` table. The creator is always admin, guests get only read and write, and roles grant nothing.
+  - **Every room route goes through `deps.require_right`.**
+  - **Removal and bans:** `DELETE …/members/{agent}?ban=` removes a member or guest and revokes what they delegated. A ban blocks rejoining until an admin grants again.
 
 ## agentd commands (run from `agents/`)
 
@@ -99,6 +121,22 @@ Milestone 1 check: get a lobbyd token with `audience` = agentd's `base_url`, the
   - Modes: by default the first successful result ends the session with `final`, and messages sent during that turn join the same conversation. With `--interactive`, the worker emits `needs_input` after each result, and a stop ends the session as completed with the last result.
   - A stop during a turn terminates claude immediately. Every result is also saved as the `result.md` artifact, and files claude writes into the artifacts dir are announced when the session ends.
   - Tests use `tests/fake_claude.py`, which emits the same stream-json and never calls a model. When Claude Code's stream-json format changes, update `Translator` and the fake together.
+- **Authority (docs#8):**
+  - Each session runs under an immutable `AGENTD_GRANT`, fixed at spawn: requester, profile, workspace, network, expiry, budget, room and `approval: none`. Claude's flags come only from it, and claude is started once.
+  - Owner messages and room messages reach claude as `<owner-message>` and `<room-message trust="untrusted">` frames, with forged tags defanged.
+  - Room tool results carry untrusted provenance. Room writes refuse secret env values, and `room_reply: false` removes them.
+  - These checks complement isolation and room ACLs; they don't replace them.
+- **Caller grants and isolation (docs#9):**
+  - **agentd is default-deny:** a caller needs an operator policy (`callers`, or a hot-reloaded `callers_file`) granting profiles, worker types, workspaces, a session quota and a spend cap. `approval_required` profiles are refused.
+  - **The process backend accepts only `trusted` callers.** Untrusted callers need `backend: sandbox` (`backends/sandbox.py`, bubblewrap):
+    - its own namespaces;
+    - a read-only system view plus only the runtime;
+    - a private HOME and `/tmp`;
+    - read-write scratch and artifacts, and the workspace read-only or read-write per the profile;
+    - a cleared environment and rlimits.
+
+    The PID namespace kills every descendant. If bubblewrap is missing, startup fails.
+  - CI installs bubblewrap so these tests run.
 - **Room tools.** When a session has a room (`ROOMSD_*` env), the adapter passes `--mcp-config` for `workers/room_tools.py`. That is an MCP server (`mcp` SDK **v2**: `MCPServer`, not `FastMCP`) providing `rooms_read`, `rooms_send`, `rooms_note_get` and `rooms_note_put`, which act as the worker's invite identity. Claude sees them as `mcp__rooms__*`; they are added to `--allowedTools` and never to `--tools`. **Room access comes from the invite, not the profile:** the orchestrator granted it by inviting the worker. `rooms_read` with no `after_id` returns what's new since the last read, and the first call returns the last 30 messages.
 - **Room wake.** `RoomWatcher` polls the room with the invite (starting from the room's current end) and feeds messages from others to claude as `[room message #N from X (type)] …` turns. By default only messages that mention the worker do this (`@<short name>` or its full identity), and `--room-wake all|none` changes that. Wakes are ignored once a one-shot session has its result. agentd's room close-out (handoff, then revoke) runs just *after* the session turns terminal, so tests must wait for it. `tests/fake_roomsd.py` is an in-memory roomsd over real HTTP for tests that need subprocesses to reach a room.
 - `lobby_client.py`: the lobbyd registry heartbeat runs every ttl/3 and also immediately when `Supervisor.capacity_changed` fires. The instance deregisters on shutdown. `close_out_room` joins the room, posts, then revokes the invite token at the room's roomsd.
@@ -169,6 +207,12 @@ Dependencies run one way: roomsd, agentd and agents call lobbyd; agentd and its 
 - **Many agentd instances** (e.g. one per host). Each has a stable `instance_id` (also its lobbyd key name) and globally unique session IDs (`agt_<ULID>`), and keeps its own SQLite and `/var/lib/agentd`; don't assume shared storage. Callers find instances in the lobbyd registry.
 - **Many worker types.** Workers sit behind config-defined `worker_types`, kept separate from profiles (permissions) and from the runner (process or Docker). Don't hard-code anything specific to one worker type in the gateway.
 - **Many concurrent sessions per instance.** `max_sessions` is enforced, and a request over the limit gets 429 (no queueing yet). One slow or chatty session must never block another's event streaming or cleanup.
+
+## Peers and offers (lobbyd, docs#7)
+
+Existing named agents (not spawned workers) register *session instances* with `PUT /v1/peers/{instance_id}` and poll `GET /v1/peers/{instance_id}/inbox` for offers of room work.
+- **Lifecycle:** `offered` → `accepted`, `declined`, `expired` or `cancelled`; then `joined` → `working` → `handed_off` or `completed`. Every transition is a conditional update. Repeating a transition returns `changed: false`, so start work only when `changed` is true.
+- **Separate from `summon`:** an offer grants nothing. The peer joins the room with its own identity, under roomsd admission, and lobbyd still calls nobody.
 
 ## End-to-end flow: bringing an agentd worker into a room
 
