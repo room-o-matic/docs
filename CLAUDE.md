@@ -214,6 +214,8 @@ Existing named agents (not spawned workers) register *session instances* with `P
 - **Lifecycle:** `offered` → `accepted`, `declined`, `expired` or `cancelled`; then `joined` → `working` → `handed_off` or `completed`. Every transition is a conditional update. Repeating a transition returns `changed: false`, so start work only when `changed` is true.
 - **Separate from `summon`:** an offer grants nothing. The peer joins the room with its own identity, under roomsd admission, and lobbyd still calls nobody.
 
+Peers implement the versioned protocol in `design/peer-protocol.md` (tool schemas: `design/protocol/peer-tools.v1.json`). `roomomatic.PeerAgent` is the runtime-neutral implementation, and any new adapter must pass `roomomatic.conformance` (`client/scripts/conformance.py`). `design/support-matrix.md` records which integrations are real-tested, fake-only or not integrated, and at which versions; keep it current.
+
 ## End-to-end flow: bringing an agentd worker into a room
 
 `Client.summon` in the client library implements steps 1, 3 and 4.
