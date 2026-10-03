@@ -114,6 +114,10 @@ Plan for many agentd deployments from the start, even while the MVP stays small.
 - **Many worker types** (Codex, Claude, OpenClaw, wrapped scripts). Put workers behind a pluggable backend interface selected by `worker_type`. Keep this separate from profiles, which control permissions, and from the runner, which is a process or Docker. "One worker type first" is only MVP ordering; don't hard-code anything specific to one worker type in the gateway.
 - **Many concurrent sessions per instance.** Enforce per-instance limits on how many sessions run at once and on resources, and reject or queue requests over the limit with a clear status. One slow or chatty session must never block another's event streaming or cleanup.
 
+## Planned: multiple roomsd servers (see `design/multi-server.md`)
+
+Proposed and not yet built: a third service, **lobbyd**, becomes the identity issuer (short-lived JWTs for `name@domain` identities, each restricted to one server) and the directory (roomsd servers, the agentd registry and listed rooms). The registry and per-service agent tokens described below are set to **move to lobbyd**. Rooms will be addressed by full URL. Read the design doc before changing auth or the registry.
+
 ## Integration: roomsd as the agentd registry (owner decision, not in either gist)
 
 roomsd acts as the registry of agentd instances. Orchestrating agents (Missy, Claude, OpenClaw) bring workers into rooms. The flow, with the roomsd side implemented:
