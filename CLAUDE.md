@@ -27,6 +27,7 @@ uv run ruff check . && uv run ruff format .
 
 export ROOMSD_DATA_DIR=.data              # default is /var/lib/roomsd
 uv run roomsd token create <agent>        # prints a bearer token (only its sha256 is stored)
+uv run roomsd token create <instance_id> --scope agentd   # token for an agentd instance
 uv run roomsd token revoke <agent>
 uv run roomsd serve [--port 8766]         # agentd's spec uses 8765, so roomsd defaults to 8766
 uv run roomsd tail <room_id> --token ... [--once]   # or set ROOMSD_TOKEN / ROOMSD_URL
@@ -34,17 +35,22 @@ uv run roomsd tail <room_id> --token ... [--once]   # or set ROOMSD_TOKEN / ROOM
 
 ## roomsd code layout
 
-- `app.py`: `create_app(settings)` builds the FastAPI app, and all routes live inside it. Each request opens its own sqlite3 connection (`get_conn`). There is no ORM, just raw SQL.
-- Shared helpers that every route should use:
-  - `current_agent`: resolves the bearer token to an agent name.
+- `app.py`: `create_app(settings)` builds the FastAPI app and mounts the routers in `routes/` (`rooms.py`, `registry.py`, `auth.py`). Each request opens its own sqlite3 connection (`deps.get_conn`). There is no ORM, just raw SQL.
+- Tokens have a **scope** (`auth.Principal.scope`), and every route must check it:
+  - `agent`: a named agent (Boostie, Missy, …). Full access to rooms, subject to membership.
+  - `agentd`: an agentd instance. It may only manage its own registry entry, where the token's agent name is its `instance_id`.
+  - `invite`: a guest limited to one room, with the identity `<inviter>/<name>`. Named agents can't contain `/`, so an invite can never impersonate one. A single agent name can't hold tokens in more than one scope.
+- Shared helpers in `deps.py` that every route should use:
+  - `Caller`: resolves the bearer token to a `Principal`, rejecting tokens that are revoked or expired.
+  - `require_scope`: rejects a token whose scope isn't allowed on the route.
   - `assert_identity`: rejects a body `from`, `created_by` or `agent` that differs from the token.
-  - `require_participant`: 404 if the room is missing, 403 if the caller hasn't joined, and it refreshes `last_seen_at`.
+  - `require_room` / `require_participant`: 404 if the room is missing, 403 if the caller hasn't joined (or holds an invite for another room). `require_participant` also refreshes `last_seen_at`.
   - `require_writable`: 409 if the room is archived.
   - `db.audit(...)`: call it inside the same transaction as every write.
 - `db.py`: the schema follows gist §12 plus `tokens` and `audit` tables. It is created with `create table if not exists` on startup, and there is no migration tool yet.
 - `models.py`: the optional typed-message fields (`confidence`, `reply_requested`, `severity`, `based_on_messages`) are stored in `messages.payload_json`. To add one, list it in `PAYLOAD_FIELDS` and add it to both models.
-- Tests use FastAPI's `TestClient` against a temporary database. The fixtures in `tests/conftest.py` (`make_agent`, `boostie`, `missy`, `room_id`) issue real tokens.
-- MVP access rules: any authenticated agent can join any room, and every other room route requires being a participant. Per-room permissions come later.
+- Tests use FastAPI's `TestClient` against a temporary database. The fixtures in `tests/conftest.py` (`make_agent(name, scope)`, `boostie`, `missy`, `agentd1`, `room_id`) issue real tokens. To test expiry, set `expires_at` in the past directly in SQL.
+- MVP access rules: any `agent`-scope token can join any room, and an invite can join only its own room. Every other room route requires being a participant. Per-room permissions come later.
 
 ## How the two services relate
 
@@ -83,18 +89,18 @@ Plan for many agentd deployments from the start, even while the MVP stays small.
 
 ## Integration: roomsd as the agentd registry (owner decision, not in either gist)
 
-roomsd acts as the registry of agentd instances. Orchestrating agents (Missy, Claude, OpenClaw) bring workers into rooms. The flow:
+roomsd acts as the registry of agentd instances. Orchestrating agents (Missy, Claude, OpenClaw) bring workers into rooms. The flow, with the roomsd side implemented:
 
-1. **Register.** Each agentd instance registers with roomsd: `instance_id`, base URL, available `worker_type`s and profiles, and spare capacity. It renews the entry with heartbeats. Treat an entry like a task-claim lease: once heartbeats stop, the instance drops out of lookups.
-2. **Create a room.** The orchestrator creates a room for the work.
-3. **Pick an instance.** The orchestrator queries the registry by `worker_type` and capacity.
-4. **Invite.** The orchestrator gets a room-scoped invite token from roomsd (bound to a room, an agent identity and a role). It then calls that instance's `POST /v1/sessions` with the room reference (roomsd URL, `room_id`, role) and the invite token.
-5. **Join.** agentd hands the token to the worker through its allowlisted environment, never as a profile permission. The worker joins the room as a participant and works through the `rooms_*` tools. Its participant identity should trace back to `instance_id` and `session_id`.
-6. **Finish.** When the session ends for any reason (final, failed, expired or stopped), agentd makes sure a closing `status` or `handoff` message is posted to the room. The worker's token stops working when the session ends.
+1. **Register.** The agentd instance, using its `agentd`-scope token, calls `PUT /v1/registry/agentd/{instance_id}` with `base_url`, `worker_types`, `profiles`, `max_sessions`, `active_sessions`, and optional `metadata` and `ttl_seconds` (default 60, max 600). Sending the same PUT again is the heartbeat; send it about every ttl/3. Entries past `expires_at` drop out of lookups. `DELETE` the entry on a clean shutdown.
+2. **Create a room.** The orchestrator calls `POST /v1/rooms`.
+3. **Pick an instance.** The orchestrator calls `GET /v1/registry/agentd?worker_type=…&profile=…&has_capacity=true`. Results come back sorted with the most spare capacity first.
+4. **Invite.** The orchestrator calls `POST /v1/rooms/{id}/invites` with `{name, role, ttl_seconds}` (default 1h, max 24h) and gets back a token whose identity is `<orchestrator>/<name>`. Name the worker after where it runs, e.g. `agentd-host1.codex`. The orchestrator then calls the instance's `POST /v1/sessions` with the roomsd URL, `room_id` and invite token. (That agentd side isn't built yet.)
+5. **Join.** agentd hands the token to the worker through its allowlisted environment, never as a profile permission. The worker calls `POST /v1/rooms/{id}/participants`, and its role is fixed to the role on the invite. Its first message should be a `status` message naming `instance_id` and `session_id`.
+6. **Finish.** When the session ends for any reason, agentd posts a closing `status` or `handoff` message and then calls `POST /v1/auth/revoke` with the worker's token, so the token dies with the session. The inviter or the room creator can also revoke it with `DELETE /v1/rooms/{id}/invites/{invite_id}`. `GET /v1/auth/whoami` returns any token's identity, scope, room and expiry.
 
 Constraints this keeps:
 
 - roomsd still never spawns, schedules or calls agents. The orchestrator does the spawning, through agentd.
 - Sender identity still comes from the token. A worker can't post as its orchestrator or as another worker.
 - agentd never needs room-admin rights. It only passes along the invite token it was given.
-- Endpoint names and the exact registry shape are still open. A dedicated registry resource in roomsd (needed for expiry and filtering by `worker_type`) is the expected direction, rather than overloading room notes.
+- Invitees can't create rooms, issue further invites or read the registry. Registry lookups are for `agent`-scope tokens only.
