@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-There are three services: roomsd, agentd and lobbyd. All are Python/FastAPI MVPs managed with uv, and they share the same conventions (src layout, raw sqlite3, ruff, pytest). lobbyd issues identities and runs the directory, and roomsd and agentd both depend on it.
+There are four services (lobbyd, roomsd, agentd, dispatchd) and a client library with a CLI. All are Python, managed with uv, and share the same conventions (src layout, raw sqlite3, ruff, pytest); the services are FastAPI. lobbyd issues identities and runs the directory, and everything else depends on it.
 
 | Dir       | Service  | Docs |
 |-----------|----------|------|
@@ -43,7 +43,7 @@ roomsd and agentd began from two private design specs that are not published. Th
   |---|---|---|---|
   | Claude Code | `workers/claude_code.py` | CLI 2.1.288, Sonnet and Haiku | agents#18, #19 |
   | Codex | `workers/codex.py` | CLI 0.158, `gpt-6-sol` (ChatGPT login) | agents#20, #21 |
-  | Ollama | `workers/ollama.py` | 0.10.1, `qwen2.5:7b-instruct-q4_K_M`, 6 GB GTX 1660 SUPER (free) | agents#22, #23 |
+  | Ollama | `workers/ollama.py` | 0.10.1, `qwen2.5:7b-instruct-q4_K_M`, 6 GB GTX 1660 SUPER (free) | agents#22–#24, #26 |
 
   Codex and Ollama share the `TurnAdapter` session loop (`workers/turns.py`).
 - **Live tests passed:**
@@ -55,14 +55,18 @@ roomsd and agentd began from two private design specs that are not published. Th
   4. **dispatchd** with Claude, Codex and Ollama, through a signed webhook (openssl/curl) and a one-off cron schedule. Each run made a closed room, seeded notes, got one typed finding per agent, revoked the invites and archived the room. The webhook run took 33 s; Claude's total cost was $0.067.
 
   Every live run found problems; all are fixed and recorded in the PRs above, lobby#10 and dispatch#4.
-- **dispatchd** (room-o-matic/dispatch #1–#4) is done: templates, runs, cron, signed webhooks, operator API, metrics, backup. lobbyd's new `service` key scope (lobby#10) lets operators get tokens for it, which the live test found was impossible before.
+- **dispatchd** (room-o-matic/dispatch #1–#9) is done: templates, runs, cron, signed webhooks, operator API, the definitions API, workspaces on template workers, metrics, backup. lobbyd's new `service` key scope (lobby#10) lets operators get tokens for it, which the live test found was impossible before.
 - **Claude Code as yourself** (client#15, #16; rooms#15; dispatch#6–#8):
   - `rom mcp` is an MCP server acting with **your own** lobbyd key (`claude mcp add rom -e ROM_API_KEY='${ROM_API_KEY}' …`), not a guest invite. Tools cover rooms, notes (compare-and-set), workers, dispatch runs and dispatch definitions. Room tools join on first use. All of it is live-verified with `claude -p` (Sonnet): it read the inbox and replied in a thread ($0.11), and it created a template, a webhook and a schedule from one plain-English request ($0.12). A delivery signed with the returned secret then ran an Ollama worker to `done`. The live run found that a new schedule showed `next_fire: null` until the next scheduler tick; fixed in dispatch#8.
   - `rom inbox --hook` is a `UserPromptSubmit` hook: messages that mention you, are addressed to you or reply to you are injected on each prompt, marked untrusted. It never blocks a prompt, even when misconfigured. The read position is in `~/.rom/inbox-<identity>.json`, shared with `rom inbox` and the `inbox_check` tool.
   - **dispatch definitions API:** templates, schedules and webhooks can be created over the operator API, stored in the database and validated with the config file as one set. File definitions are read-only there.
+  - **Setup used in live tests** (in a scratch project dir): `claude mcp add -s project rom -e ROM_LOBBY_URL=… -e 'ROM_API_KEY=${ROM_API_KEY}' -e ROM_DISPATCH_URL=… -e ROM_STATE_DIR=… -- client/.venv/bin/rom mcp`, then a `.claude/settings.json` `UserPromptSubmit` hook running `rom inbox --hook`. Run with `claude -p --model sonnet --max-budget-usd 0.50 --mcp-config .mcp.json --strict-mcp-config --allowedTools "mcp__rom__*"`. The full recipe is in `client/README.md`.
+  - **Not yet installed** in the owner's real Claude Code config: so far it's only been run in scratch projects.
 - **Repos as knowledge bases** (client#17, dispatch#9, agents#25): `summon(workspace_path=)`, `rom summon --workspace`, MCP `worker_summon(workspace=)` and a dispatch worker's `workspace:` mount a directory on the agentd host, read-only under a `knowledge_read` profile. Summon skips an agentd that refuses the directory. The owner's candidates are `~/git/nomad_consul` and `~/git/openvpn`; don't modify them. `nomad_consul`'s working tree holds live cluster secrets (gitignored `secrets/`, `pki/`, `cluster.env`), so mount only a clean `git clone` of it, never the checkout.
   - **Clones live in `~/kb/openvpn` and `~/kb/nomad_consul`** (`/srv` is root-owned). Refresh them with `git -C ~/kb/<repo> pull`. Their committed files were scanned and hold no secrets; two UUID hits were a token *accessor* ID and an infrastructure note.
   - **Live-tested with Ollama** through `rom summon --workspace` and a dispatch template's `workspace:`. The original checkout and paths outside the roots were refused. The 7B model invented scripts until agents#26 added `search_files`, a first-turn orientation, a guard against invented file names and an empty-reply retry. It now cites real files, but its detail is unreliable. Use Claude for knowledge-base answers that matter; that isn't live-tested yet (paid).
+  - **Pending, awaiting the owner's yes:** a Claude worker answering the same two questions (hub addresses from `openvpn`, friend revocation from `nomad_consul`), about $0.05–0.15 with a budget cap. Expected answers: Botrick is the preferred hub and Boostie the standby (`openvpn/README.md`, `PLAN.md`). Revoking a friend means `./pki/30-revoke-friend.sh <name>` plus `nomad acl token delete "$(cat secrets/tokens/<name>.accessor)"` (`nomad_consul/docs/RUNBOOK.md`).
+  - **Recommended for real use:** `backend: sandbox` for these sessions. The process backend only sets the working directory; it doesn't confine a worker's own tools.
 - **Next: the owner's real agents (Odin, Boostie, Missy on OpenClaw) across machines.** Postponed by the owner in favour of the Claude Code work above. Two gaps:
   - **OpenClaw integration:** not built. `PeerAgent` and `design/peer-protocol.md` exist; ask how the bots are built before starting.
   - **Deployment packaging:** none yet. Needs systemd units, or resuming the paused Docker work, plus TLS and stable canonical URLs.
@@ -77,6 +81,8 @@ roomsd and agentd began from two private design specs that are not published. Th
     - `codex`: `--model gpt-6-sol --max-total-tokens …`
     - `ollama`: `--model qwen2.5:7b-instruct-q4_K_M`
   - **Grants:** give `you@local` (or `dispatch@local`) a `callers` grant at agentd.
+  - **Knowledge bases:** `workspace_roots: [~/kb]`, a profile `knowledge_read: {max_runtime_minutes: 10, workspace_mount: read, network: false, filesystem: read}`, and the same `workspace_roots` in the caller's grant.
+  - **Proving a repo is untouched:** snapshot HEAD, `GIT_OPTIONAL_LOCKS=0 git status --porcelain --ignored`, and every file's mtime and size, before and after. Without `GIT_OPTIONAL_LOCKS=0`, `git status` refreshes `.git/index` and the check itself changes the repo.
   - **For dispatch:** a template using oneshot worker types, a `HOOK_*` secret env var, and `lobbyd key create dispatchd --scope service --endpoint http://127.0.0.1:8768` plus `DISPATCHD_OPERATORS` for the operator API.
   - **Wake-ups:** workers are woken by `@<summon --name>`, or `@<name>-<run suffix>` for dispatch.
   - **Cost:** Claude runs cost money and Codex uses the ChatGPT plan, so ask before each run and cap budgets. Ollama is free.
@@ -209,8 +215,12 @@ Milestone 1 check: get a lobbyd token with `audience` = agentd's `base_url`, the
   - **Test fake:** `tests/fake_codex.py` emits JSONL captured from a real run. When the Codex CLI's event format changes, update `Translator` and the fake together.
 - `workers/turns.py` (`TurnAdapter`) is the session loop for turn-based adapters: Codex and Ollama subclass it and supply `run_turn`. It handles oneshot or interactive sessions, framing, wakes, budget, the turn time limit, stop and the closing summary. Fix session behaviour there, not per adapter.
 - `workers/ollama.py` is the **Ollama adapter** for local models. Ollama only serves models, so the adapter is the agent loop: `/api/chat` with tools, which it runs itself.
-  - **Tools:** room tools in-process, with the MCP server's schemas; `read_file`/`list_files` for a read or read_write workspace; `write_artifact` for read_write. No shell, no web.
-  - **Small-model guards:** exact repeat posts are refused, arguments are coerced to the schema, and tool results are plain sentences.
+  - **Tools:** room tools in-process, with the MCP server's schemas; `read_file`/`list_files`/`search_files` for a read or read_write workspace; `write_artifact` for read_write. No shell, no web. `search_files` matches lines containing every query word and skips `.git`, binaries and symlinks out of the workspace.
+  - **Small-model guards:**
+    - Exact repeat posts are refused, arguments are coerced to the schema, and tool results are plain sentences.
+    - With a workspace, the first turn gets an orientation: the top-level listing, the README head, and the other guide docs.
+    - **Invented-file guard (`Toolbox.unknown_files`):** a post or final answer naming a repo path that neither exists nor appears in the workspace's text is sent back once. A multi-segment path is checked only if its first directory exists at the top level.
+    - An empty reply gets one retry before the session fails.
   - **Logging:** building the MCP server sets root logging to INFO, so the adapter resets it to WARNING.
 - **Authority (docs#8):**
   - Each session runs under an immutable `AGENTD_GRANT`, fixed at spawn: requester, profile, workspace, network, expiry, budget, room and `approval: none`. Claude's flags come only from it, and claude is started once.
@@ -271,7 +281,7 @@ uv run rom --help
 - `rooms.py` / `agentd.py`: thin clients for each service's HTTP API (`RoomsClient.with_invite` for workers holding an invite). `AgentdClient.stream_events` parses SSE.
 - `client.py`: `Client` caches one service client per base URL and adds the workflows:
   - `create_room` picks a roomsd from the directory.
-  - `summon` = pick an agentd instance → invite → spawn. It **revokes the invite if the spawn fails**.
+  - `summon` = pick an agentd instance → invite → spawn. It **revokes the invite if the spawn fails**. `workspace_path` is a directory on the agentd host. When summon picks the instance, one that refuses the workspace (`refuses_workspace`: a 403/422 about the workspace) is skipped like a full one.
   - `summon` always has an `operation_id` (docs#13). After an ambiguous failure it reconciles through agentd's `by-operation` lookup before revoking or retrying. Invites outlive the profile's maximum runtime plus 5 minutes (`invite_ttl_for`, docs#17).
   - `finalize_session` revokes a worker's invite by id when agentd hands the close-out back (`owner_required`).
   - `cli.fmt_message` prints typed fields as `[re:#N to:… conf=… severity=… reply-requested]`; keep it in step with `PAYLOAD_FIELDS`.
@@ -298,6 +308,8 @@ uv run dispatchd check-config | serve | schedules | run <schedule> | runs | back
   - `store.py`: API-created definitions (`definitions` table, schema v3). `merge` validates file + API as one set; a name in both is an error. API webhooks get a generated `whsec_` secret, returned only on create or rotate. A retired secret is journaled by SHA-256 fingerprint (`revocations.jsonl`) before the change commits, and `recovery.post_restore` clears matching secrets.
 - **`rules` aren't enforced:** they're text. Enforcement comes from agentd profiles and grants, room admission and rights, and loop guards.
 - **Worker handles** are `<name>-<run suffix>`, because a guest identity has at most one live invite.
+- **A template worker can name `workspace:`** (an absolute path on the agentd host), which is passed to `summon(workspace_path=)`.
+- **dispatch depends on `roomomatic` as a git dependency.** After a client change dispatch needs, run `uv lock --upgrade-package roomomatic` in `dispatch/` and commit the lock.
 
 ## How the services relate
 
