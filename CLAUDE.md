@@ -28,6 +28,34 @@ roomsd and agentd began from two private design specs that are not published. Th
 > - default rooms to `closed` (`ROOMSD_DEFAULT_ADMISSION=closed`);
 > - grant agentd callers explicitly, and run any untrusted caller on `backend: sandbox`.
 
+## Current state (2026-10-04)
+
+- **Repos are public** under the Apache-2.0 license.
+  - On every repo: secret scanning, push protection and private vulnerability reporting.
+  - `main` is protected (no force-push or deletion); the four code repos also require the `test` CI check.
+  - The org profile, SECURITY.md, CONTRIBUTING.md, issue and PR templates, and brand assets live in `room-o-matic/.github`. `assets/make.py` regenerates the images.
+  - Commit as `91579462+TargetedEntropy@users.noreply.github.com`, never a personal email.
+- **The issue tracker is empty:** docs#1–#24 are done. The original design gists are private and must not be linked.
+- **Live testing**, one stage at a time, with the owner deciding when to move on:
+  1. **Agents collaborating on one machine, with real Claude workers.** Done; passed. The first run (Haiku) found five problems, all fixed (agents#18, client#13). The rerun with Sonnet passed in full for $0.07: threaded typed replies, mention wakes, a compare-and-set note write, a closing handoff, and invite revocation.
+  2. **Next: attach the owner's own interactive Claude Code session to a room.** Plan: `rom invite` yourself, then `claude mcp add` the worker room-tools server (`python -m agentd.workers.room_tools`, with `ROOMSD_URL`, `ROOMSD_ROOM_ID` and `ROOMSD_TOKEN` in its env). Nothing wakes the session on a mention, so it polls with `rooms_read`. This is untested; verify it, then document it as a recipe.
+  3. **Then: the owner's real agents (Odin, Boostie, Missy on OpenClaw) across machines.** Three gaps:
+     - **OpenClaw integration:** not built. `PeerAgent` and `design/peer-protocol.md` exist; ask how the bots are built before starting.
+     - **Deployment packaging:** none yet. Needs systemd units, or resuming the paused Docker work, plus TLS and stable canonical URLs.
+     - **Codex worker adapter:** not built; optional.
+- **How to rerun live test 1.** Start lobbyd, roomsd and agentd as in the docs README quickstart, with data dirs in a scratch directory. Give the agentd config a `claude-chat` worker type, as in `agentd.example.yaml`, with `--model sonnet --max-budget-usd 1.00`. Then, using two identities:
+  1. Create a room. As the peer, post a proposal and seed a `decisions` note.
+  2. `rom summon … --worker-type claude-chat --profile read_only_research --name reviewer`.
+  3. As the peer, @-mention `@reviewer`.
+  4. Send the owner's note request with `rom session send`.
+  5. `rom session stop`, then check the handoff, `room_finalization: done`, and the invite's `revoked_at`.
+
+  These runs make paid model calls: ask before each one and cap the budget.
+- **Open decisions:**
+  - Today only the owner can direct a worker's writes; room messages are framed as untrusted. Should peers in a room be able to ask a worker to edit shared notes?
+  - Org security: requiring 2FA, and restricting members' public repo creation, are with the owner.
+  - Two org repos (`demo-repository`, `curly-octo-computing-machine-demo-repository`) were not created by this project; leave them alone.
+
 ## Identity and auth (all services)
 
 - **lobbyd issues every identity**, in the form `name@domain`. Each agent holds a long-lived lobbyd API key (`lobbyd key create <name> --scope agent|agentd|roomsd`). It exchanges the key at `POST {lobbyd}/v1/token {"audience": "<service base_url>"}` for an EdDSA JWT that lasts 15 minutes. **The token is valid only at that one service** (`aud`), so each roomsd and agentd needs its own token.
@@ -137,7 +165,10 @@ Milestone 1 check: get a lobbyd token with `audience` = agentd's `base_url`, the
 - Worker types are pure config (`worker_types: {name: {command, env}}`). The built-in set has only `fake`, and real agents are added in config (see `agentd.example.yaml`). `workers/common.py` has the stdlib-only helpers workers share: `emit`, `read_msg`, `announce_in_room`.
 - `workers/claude_code.py` is the Claude Code adapter (milestone 2). It runs `claude -p --input-format stream-json --output-format stream-json` and translates both ways: the task and follow-up messages become user turns, and system/assistant/result output becomes progress, error or final (with `cost_usd` and `claude_session_id`).
   - **Tool permissions come only from the profile, through `tool_policy`.** There is no shell unless the profile has `shell: true`, so by default the worker runs `--restricted`. Write tools need `workspace_mount: read_write`, and web tools need `network`. `--permission-prompts none` denies anything that would prompt. `max_budget_usd`, `claude_tools` and `claude_permission_mode` are optional profile keys, and the lower of the profile's and the worker type's budget applies.
-  - Modes: by default the first successful result ends the session with `final`, and messages sent during that turn join the same conversation. With `--interactive`, the worker emits `needs_input` after each result, and a stop ends the session as completed with the last result.
+  - Modes: by default the first successful result ends the session with `final`, and messages sent during that turn join the same conversation. With `--interactive`, the worker emits `needs_input` after each result.
+  - **Stop between turns:** claude gets one closing turn (`CLOSING_PROMPT`) to write the room handoff: what it did, what it changed, what's still open. The turn is bounded by `--closing-summary-seconds` (default 8, which must stay below the gateway's `stop_grace_seconds`; `0` turns it off). On a timeout or failure the previous result stands.
+  - **Stop reason:** a session that completes because it was stopped keeps its `stop_reason`, e.g. `completed (caller_cancelled)`.
+  - **Startup event:** stream-json repeats `system/init` every turn, so `Translator` announces "claude started" once per session and model.
   - A stop during a turn terminates claude immediately. Every result is also saved as the `result.md` artifact, and files claude writes into the artifacts dir are announced when the session ends.
   - Tests use `tests/fake_claude.py`, which emits the same stream-json and never calls a model. When Claude Code's stream-json format changes, update `Translator` and the fake together.
 - **Authority (docs#8):**
@@ -202,6 +233,7 @@ uv run rom --help
   - `summon` = pick an agentd instance → invite → spawn. It **revokes the invite if the spawn fails**.
   - `summon` always has an `operation_id` (docs#13). After an ambiguous failure it reconciles through agentd's `by-operation` lookup before revoking or retrying. Invites outlive the profile's maximum runtime plus 5 minutes (`invite_ttl_for`, docs#17).
   - `finalize_session` revokes a worker's invite by id when agentd hands the close-out back (`owner_required`).
+  - `cli.fmt_message` prints typed fields as `[re:#N to:… conf=… severity=… reply-requested]`; keep it in step with `PAYLOAD_FIELDS`.
   - `watch` polls `/v1/me/updates` on each server. Its "from now" cursor is resolved when `watch()` is called, not on first iteration.
 - Service API changes need matching updates here, in the FakeWorld fakes, and in `scripts/e2e.py`.
 
