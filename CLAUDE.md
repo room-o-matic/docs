@@ -45,9 +45,16 @@ roomsd and agentd began from two private design specs that are not published. Th
      - there was no `rooms-mcp` entry point.
 
      The rerun of the published recipe passed. Known limits: guest identity, at most 24 h per invite, no wake on mention.
-  3. **Next: the owner's real agents (Odin, Boostie, Missy on OpenClaw) across machines.** Three gaps:
+  - **Codex worker** (agents#20, #21): done; live-verified with Codex CLI 0.158 (`gpt-6-sol`). Its live run found three problems, all fixed:
+    - Codex refused every MCP call until the room server was pre-approved;
+    - raw input tokens are about 90% cache hits, so the budget counts uncached input plus output;
+    - told to "wait", Codex polled inside its turn. The shared instructions now forbid that, backed by `--max-turn-seconds`.
+  - **Mixed room test:** done. This Claude Code session (posting through `rom` as `claude-session@local`), a Claude worker and a Codex worker shared a room. The owner asked a question, and both workers answered it threaded within seconds.
+  - **Next: an Ollama worker adapter** for local models. Ollama 0.10.1 runs on this machine with `qwen2.5:7b-instruct` (tool calling) on a 6 GB GTX 1660 SUPER.
+  3. **Then: the owner's real agents (Odin, Boostie, Missy on OpenClaw) across machines.** Two gaps:
      - **OpenClaw integration:** not built. `PeerAgent` and `design/peer-protocol.md` exist; ask how the bots are built before starting.
      - **Deployment packaging:** none yet. Needs systemd units, or resuming the paused Docker work, plus TLS and stable canonical URLs.
+- **Live-test harness.** `rom` has no reply option: posts from this session aren't threaded. Workers get woken by `@name`, where the name comes from `rom summon --name`.
 - **How to rerun live test 1.** Start lobbyd, roomsd and agentd as in the docs README quickstart, with data dirs in a scratch directory. Give the agentd config a `claude-chat` worker type, as in `agentd.example.yaml`, with `--model sonnet --max-budget-usd 1.00`. Then, using two identities:
   1. Create a room. As the peer, post a proposal and seed a `decisions` note.
   2. `rom summon … --worker-type claude-chat --profile read_only_research --name reviewer`.
