@@ -31,40 +31,48 @@ roomsd and agentd began from two private design specs that are not published. Th
 
 ## Current state (2026-10-04)
 
-- **Repos are public** under the Apache-2.0 license.
-  - On every repo: secret scanning, push protection and private vulnerability reporting.
-  - `main` is protected (no force-push or deletion); the four code repos also require the `test` CI check.
-  - The org profile, SECURITY.md, CONTRIBUTING.md, issue and PR templates, and brand assets live in `room-o-matic/.github`. `assets/make.py` regenerates the images.
-  - Commit as `91579462+TargetedEntropy@users.noreply.github.com`, never a personal email.
-- **The issue tracker is empty:** docs#1–#24 are done. The original design gists are private and must not be linked.
-- **Live testing**, one stage at a time, with the owner deciding when to move on:
-  1. **Agents collaborating on one machine, with real Claude workers.** Done; passed. The first run (Haiku) found five problems, all fixed (agents#18, client#13). The rerun with Sonnet passed in full for $0.07: threaded typed replies, mention wakes, a compare-and-set note write, a closing handoff, and invite revocation.
-  2. **The owner's own interactive Claude Code session in a room.** Done; passed. Recipe: "Attach your own Claude Code session" in `agents/README.md`: `rom invite`, then `claude mcp add … -e 'ROOMSD_TOKEN=${ROOMSD_TOKEN}' -- uvx --from git+https://github.com/room-o-matic/agents rooms-mcp`. The first run found four problems, all fixed in agents#19:
-     - the tools never joined the room; they now join on first use;
-     - the MCP SDK masked errors, so `RoomsdError` and `Refused` are now `ToolError`s;
-     - the obvious recipe committed the token to `.mcp.json`;
-     - there was no `rooms-mcp` entry point.
+- **Repos:** docs, lobby, rooms, agents, client, dispatch and `.github` are all public under Apache-2.0.
+  - **On every repo:** secret scanning, push protection, private vulnerability reporting, and auto-delete of merged branches.
+  - **`main` is protected:** no force-push or deletion anywhere, and the five code repos also require the `test` CI check.
+  - **`room-o-matic/.github`** holds the org profile, SECURITY.md, CONTRIBUTING.md, templates and brand assets. `assets/make.py` regenerates the images, including one social preview per repo.
+  - **Commit as** `91579462+TargetedEntropy@users.noreply.github.com`, never a personal email.
+- **Issue tracker:** empty; docs#1–#24 are done. The original design gists are private and must not be linked.
+- **Worker adapters, all live-verified on this machine:**
 
-     The rerun of the published recipe passed. Known limits: guest identity, at most 24 h per invite, no wake on mention.
-  - **Codex worker** (agents#20, #21): done; live-verified with Codex CLI 0.158 (`gpt-6-sol`). Its live run found three problems, all fixed:
-    - Codex refused every MCP call until the room server was pre-approved;
-    - raw input tokens are about 90% cache hits, so the budget counts uncached input plus output;
-    - told to "wait", Codex polled inside its turn. The shared instructions now forbid that, backed by `--max-turn-seconds`.
-  - **Mixed room test:** done. This Claude Code session (posting through `rom` as `claude-session@local`), a Claude worker and a Codex worker shared a room. The owner asked a question, and both workers answered it threaded within seconds.
-  - **Ollama worker** (agents#22): done; live-verified with Ollama 0.10.1 and `qwen2.5:7b-instruct-q4_K_M` on this machine's 6 GB GTX 1660 SUPER, at no cost. The 7B model needed the small-model guards: it posted a message three times, and it sent `to` as a string.
-  - **dispatchd** (room-o-matic/dispatch #1–#3, built 2026-10-04): scheduled and webhook-triggered rooms. Its e2e runs against real services with the fake worker; there has been no live run with real models yet.
-  3. **Then: the owner's real agents (Odin, Boostie, Missy on OpenClaw) across machines.** Two gaps:
-     - **OpenClaw integration:** not built. `PeerAgent` and `design/peer-protocol.md` exist; ask how the bots are built before starting.
-     - **Deployment packaging:** none yet. Needs systemd units, or resuming the paused Docker work, plus TLS and stable canonical URLs.
-- **Live-test harness.** `rom` has no reply option: posts from this session aren't threaded. Workers get woken by `@name`, where the name comes from `rom summon --name`.
-- **How to rerun live test 1.** Start lobbyd, roomsd and agentd as in the docs README quickstart, with data dirs in a scratch directory. Give the agentd config a `claude-chat` worker type, as in `agentd.example.yaml`, with `--model sonnet --max-budget-usd 1.00`. Then, using two identities:
-  1. Create a room. As the peer, post a proposal and seed a `decisions` note.
-  2. `rom summon … --worker-type claude-chat --profile read_only_research --name reviewer`.
-  3. As the peer, @-mention `@reviewer`.
-  4. Send the owner's note request with `rom session send`.
-  5. `rom session stop`, then check the handoff, `room_finalization: done`, and the invite's `revoked_at`.
+  | adapter | module | verified with | PRs |
+  |---|---|---|---|
+  | Claude Code | `workers/claude_code.py` | CLI 2.1.288, Sonnet and Haiku | agents#18, #19 |
+  | Codex | `workers/codex.py` | CLI 0.158, `gpt-6-sol` (ChatGPT login) | agents#20, #21 |
+  | Ollama | `workers/ollama.py` | 0.10.1, `qwen2.5:7b-instruct-q4_K_M`, 6 GB GTX 1660 SUPER (free) | agents#22, #23 |
 
-  These runs make paid model calls: ask before each one and cap the budget.
+  Codex and Ollama share the `TurnAdapter` session loop (`workers/turns.py`).
+- **Live tests passed:**
+  1. **Agents on one machine:** a Claude worker reviewed, answered a mention, wrote a note with compare-and-set, and handed off.
+  2. **The owner's own Claude Code session in a room:** the recipe is in `agents/README.md`, "Attach your own Claude Code session". Limits: guest identity, invites last at most 24 h, no wake on mention.
+  3. **Mixed rooms:**
+     - Claude, Codex and this session together.
+     - Claude, Codex and Ollama together: all three answered the owner within 7 s. Agent-to-agent reviews worked (Ollama proposed and @-addressed the others; Claude objected; Codex filed a finding), and the reply-depth limit (`max_hops`) ended the chain at depth 3.
+  4. **dispatchd** with Claude, Codex and Ollama, through a signed webhook (openssl/curl) and a one-off cron schedule. Each run made a closed room, seeded notes, got one typed finding per agent, revoked the invites and archived the room. The webhook run took 33 s; Claude's total cost was $0.067.
+
+  Every live run found problems; all are fixed and recorded in the PRs above, lobby#10 and dispatch#4.
+- **dispatchd** (room-o-matic/dispatch #1–#4) is done: templates, runs, cron, signed webhooks, operator API, metrics, backup. lobbyd's new `service` key scope (lobby#10) lets operators get tokens for it, which the live test found was impossible before.
+- **Next: the owner's real agents (Odin, Boostie, Missy on OpenClaw) across machines.** Two gaps:
+  - **OpenClaw integration:** not built. `PeerAgent` and `design/peer-protocol.md` exist; ask how the bots are built before starting.
+  - **Deployment packaging:** none yet. Needs systemd units, or resuming the paused Docker work, plus TLS and stable canonical URLs.
+- **Observed, not yet acted on:**
+  - **dispatchd summons all workers at once.** Oneshot workers race, so only Codex visibly read the others' posts before writing its own. An option for staggered or sequential summons would help "don't repeat" rules.
+  - **The 7B Ollama model** is the weakest reviewer: it made a factual slip, and it sometimes leaves out the requested confidence.
+  - **`rom say` can't set `in_reply_to`,** so posts from this session aren't threaded.
+  - **A lobby `test_operations` flake:** it failed once with `SystemExit: 2`, then passed 16 times locally and in CI.
+- **Running live tests.** Stand the stack up in a scratch dir, as in the docs README quickstart. Ports: lobbyd 8767, roomsd 8766, agentd 8765, dispatchd 8768.
+  - **agentd worker types:**
+    - `claude` / `claude-chat`: `--model sonnet --max-budget-usd …`
+    - `codex`: `--model gpt-6-sol --max-total-tokens …`
+    - `ollama`: `--model qwen2.5:7b-instruct-q4_K_M`
+  - **Grants:** give `you@local` (or `dispatch@local`) a `callers` grant at agentd.
+  - **For dispatch:** a template using oneshot worker types, a `HOOK_*` secret env var, and `lobbyd key create dispatchd --scope service --endpoint http://127.0.0.1:8768` plus `DISPATCHD_OPERATORS` for the operator API.
+  - **Wake-ups:** workers are woken by `@<summon --name>`, or `@<name>-<run suffix>` for dispatch.
+  - **Cost:** Claude runs cost money and Codex uses the ChatGPT plan, so ask before each run and cap budgets. Ollama is free.
 - **Open decisions:**
   - Today only the owner can direct a worker's writes; room messages are framed as untrusted. Should peers in a room be able to ask a worker to edit shared notes?
   - Org security: requiring 2FA, and restricting members' public repo creation, are with the owner.
