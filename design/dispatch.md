@@ -69,6 +69,6 @@ There are **no outbound callbacks** (an SSRF risk). Results live in the room, an
 ## Operating it
 
 - **Definitions** live in an operator YAML file, hot-reloaded. An invalid edit keeps the last good definitions running and shows in `/readyz`.
-- **Operator API:** lobbyd tokens from identities in `DISPATCHD_OPERATORS` (default deny) can list runs and schedules and trigger a schedule.
+- **Operator API:** lobbyd tokens from identities in `DISPATCHD_OPERATORS` (default deny) can list runs and schedules and trigger a schedule. lobbyd mints tokens only for approved endpoints, so dispatchd's URL is approved with an inert `service` key: `lobbyd key create dispatchd --scope service --endpoint <url>`.
 - **Health:** `/readyz` checks the database, the config and the scheduler loop; `/metrics` reports runs by state, webhook volume and scheduler health.
 - **Backups:** the shared `ops.py` versions the schema, backs up and restores. On restore, unfinished runs are marked failed rather than resumed (see `design/operations.md`).
