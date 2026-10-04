@@ -50,7 +50,7 @@ roomsd and agentd began from two private design specs that are not published. Th
     - raw input tokens are about 90% cache hits, so the budget counts uncached input plus output;
     - told to "wait", Codex polled inside its turn. The shared instructions now forbid that, backed by `--max-turn-seconds`.
   - **Mixed room test:** done. This Claude Code session (posting through `rom` as `claude-session@local`), a Claude worker and a Codex worker shared a room. The owner asked a question, and both workers answered it threaded within seconds.
-  - **Next: an Ollama worker adapter** for local models. Ollama 0.10.1 runs on this machine with `qwen2.5:7b-instruct` (tool calling) on a 6 GB GTX 1660 SUPER.
+  - **Ollama worker** (agents#22): done; live-verified with Ollama 0.10.1 and `qwen2.5:7b-instruct-q4_K_M` on this machine's 6 GB GTX 1660 SUPER, at no cost. The 7B model needed the small-model guards: it posted a message three times, and it sent `to` as a string.
   3. **Then: the owner's real agents (Odin, Boostie, Missy on OpenClaw) across machines.** Two gaps:
      - **OpenClaw integration:** not built. `PeerAgent` and `design/peer-protocol.md` exist; ask how the bots are built before starting.
      - **Deployment packaging:** none yet. Needs systemd units, or resuming the paused Docker work, plus TLS and stable canonical URLs.
@@ -189,6 +189,11 @@ Milestone 1 check: get a lobbyd token with `audience` = agentd's `base_url`, the
   - **Budget:** `--max-total-tokens` / `max_total_tokens` counts uncached input plus output, because Codex resends the thread every turn.
   - **Turns must end.** The shared instructions forbid waiting or polling inside a turn. Without that rule, Codex told to "wait" kept its turn open, and every later message queued behind it. `--max-turn-seconds` (default 600) stops a runaway turn; an interactive session keeps listening.
   - **Test fake:** `tests/fake_codex.py` emits JSONL captured from a real run. When the Codex CLI's event format changes, update `Translator` and the fake together.
+- `workers/turns.py` (`TurnAdapter`) is the session loop for turn-based adapters: Codex and Ollama subclass it and supply `run_turn`. It handles oneshot or interactive sessions, framing, wakes, budget, the turn time limit, stop and the closing summary. Fix session behaviour there, not per adapter.
+- `workers/ollama.py` is the **Ollama adapter** for local models. Ollama only serves models, so the adapter is the agent loop: `/api/chat` with tools, which it runs itself.
+  - **Tools:** room tools in-process, with the MCP server's schemas; `read_file`/`list_files` for a read or read_write workspace; `write_artifact` for read_write. No shell, no web.
+  - **Small-model guards:** exact repeat posts are refused, arguments are coerced to the schema, and tool results are plain sentences.
+  - **Logging:** building the MCP server sets root logging to INFO, so the adapter resets it to WARNING.
 - **Authority (docs#8):**
   - Each session runs under an immutable `AGENTD_GRANT`, fixed at spawn: requester, profile, workspace, network, expiry, budget, room and `approval: none`. Claude's flags come only from it, and claude is started once.
   - Owner messages and room messages reach claude as `<owner-message>` and `<room-message trust="untrusted">` frames, with forged tags defanged.
