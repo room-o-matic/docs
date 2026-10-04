@@ -180,6 +180,7 @@ Milestone 1 check: get a lobbyd token with `audience` = agentd's `base_url`, the
   - **Permissions:** the profile picks Codex's sandbox (`read-only` or `workspace-write`; network only if allowed). It runs with `approval_policy="never"`, `--ignore-user-config` and `shell_environment_policy.inherit="core"`. Use `--external-sandbox` only on `backend: sandbox`.
   - **Room tools:** the server gets its token by name (`env_vars`), never in argv. Only that server is pre-approved (`default_tools_approval_mode="approve"`); without that, Codex refuses every MCP call.
   - **Budget:** `--max-total-tokens` / `max_total_tokens` counts uncached input plus output, because Codex resends the thread every turn.
+  - **Turns must end.** The shared instructions forbid waiting or polling inside a turn. Without that rule, Codex told to "wait" kept its turn open, and every later message queued behind it. `--max-turn-seconds` (default 600) stops a runaway turn; an interactive session keeps listening.
   - **Test fake:** `tests/fake_codex.py` emits JSONL captured from a real run. When the Codex CLI's event format changes, update `Translator` and the fake together.
 - **Authority (docs#8):**
   - Each session runs under an immutable `AGENTD_GRANT`, fixed at spawn: requester, profile, workspace, network, expiry, budget, room and `approval: none`. Claude's flags come only from it, and claude is started once.
