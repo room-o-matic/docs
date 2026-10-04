@@ -56,7 +56,11 @@ roomsd and agentd began from two private design specs that are not published. Th
 
   Every live run found problems; all are fixed and recorded in the PRs above, lobby#10 and dispatch#4.
 - **dispatchd** (room-o-matic/dispatch #1–#4) is done: templates, runs, cron, signed webhooks, operator API, metrics, backup. lobbyd's new `service` key scope (lobby#10) lets operators get tokens for it, which the live test found was impossible before.
-- **Next: the owner's real agents (Odin, Boostie, Missy on OpenClaw) across machines.** Two gaps:
+- **Claude Code as yourself** (client#15, #16; rooms#15; dispatch#6, #7):
+  - `rom mcp` is an MCP server acting with **your own** lobbyd key (`claude mcp add rom -e ROM_API_KEY='${ROM_API_KEY}' …`), not a guest invite. Tools cover rooms, notes (compare-and-set), workers, dispatch runs and dispatch definitions. Room tools join on first use. The room tools and the hook are live-verified with `claude -p`; the definition tools are covered by unit tests and dispatch's e2e only.
+  - `rom inbox --hook` is a `UserPromptSubmit` hook: messages that mention you, are addressed to you or reply to you are injected on each prompt, marked untrusted. It never blocks a prompt, even when misconfigured. The read position is in `~/.rom/inbox-<identity>.json`, shared with `rom inbox` and the `inbox_check` tool.
+  - **dispatch definitions API:** templates, schedules and webhooks can be created over the operator API, stored in the database and validated with the config file as one set. File definitions are read-only there.
+- **Next: the owner's real agents (Odin, Boostie, Missy on OpenClaw) across machines.** Postponed by the owner in favour of the Claude Code work above. Two gaps:
   - **OpenClaw integration:** not built. `PeerAgent` and `design/peer-protocol.md` exist; ask how the bots are built before starting.
   - **Deployment packaging:** none yet. Needs systemd units, or resuming the paused Docker work, plus TLS and stable canonical URLs.
 - **Resolved follow-ups from live testing** (all live-verified in one sequential dispatch run):
@@ -132,7 +136,7 @@ uv run roomsd tail <room_id> [--once]     # token: --token, $ROOMSD_TOKEN, or LO
   - `require_writable`: 409 if the room is archived.
   - `db.audit(...)`: call it inside the same transaction as every write.
 - **Rooms are addressed by URL:** `settings.room_url(id)` = `{base_url}/v1/rooms/{id}`. API responses carry `room_url`, and clients should store URLs, not bare IDs.
-- `GET /v1/me/updates?cursor=` returns new messages across every room the caller has joined. It works because `messages.id` is a single autoincrement across the whole server; keep it that way.
+- `GET /v1/me/updates?cursor=` returns new messages across every room the caller has joined (for an agent: every room it holds `read` in, joined or not, rooms#15; an invite: its one room). It works because `messages.id` is a single autoincrement across the whole server; keep it that way.
 - Listing: `listed`/`tags` are set on create or by the creator through `PATCH /v1/rooms/{id}`. `lobby_client.sync_loop` (started in the lifespan only when `ROOMSD_LOBBYD_API_KEY` is set) heartbeats the server into lobbyd every ttl/3. It also pushes any room whose `listing_version > listing_synced_version`. Routes bump `listing_version` and wake the loop through `app.state.lobby_wake`. Never write to lobbyd from a route.
 - `db.py` (all three services, docs#24): the schema version is SQLite's `user_version`.
   - To change the schema, bump `SCHEMA_VERSION`, add `MIGRATIONS[old]` (old → old+1, which runs in one transaction after an automatic pre-upgrade backup), keep `SCHEMA` the full current schema, and test the upgrade.
@@ -268,6 +272,7 @@ uv run rom --help
   - `summon` always has an `operation_id` (docs#13). After an ambiguous failure it reconciles through agentd's `by-operation` lookup before revoking or retrying. Invites outlive the profile's maximum runtime plus 5 minutes (`invite_ttl_for`, docs#17).
   - `finalize_session` revokes a worker's invite by id when agentd hands the close-out back (`owner_required`).
   - `cli.fmt_message` prints typed fields as `[re:#N to:… conf=… severity=… reply-requested]`; keep it in step with `PAYLOAD_FIELDS`.
+  - `inbox.py` / `mcp.py`: `rom inbox [--hook]` and `rom mcp` for a session acting as you (see Current state). New MCP tools go in `TOOLS` and the README table, and must raise `ToolError` (via `readable_errors`) so the session sees the reason.
   - `watch` polls `/v1/me/updates` on each server. Its "from now" cursor is resolved when `watch()` is called, not on first iteration.
 - Service API changes need matching updates here, in the FakeWorld fakes, and in `scripts/e2e.py`.
 
@@ -286,7 +291,8 @@ uv run dispatchd check-config | serve | schedules | run <schedule> | runs | back
   - `runner.py`: the run lifecycle. Each step is recorded, so a resumed run never duplicates; summons use `operation_id=<run>.<worker>` and offers use `offer_id=<run>.<agent>`.
   - `scheduler.py`: no fire on first sight; `schedule_state.spec` triggers recompute after an edit; a missed fire beyond `catch_up` is skipped.
   - `hooks.py`: HMAC over `"<ts>.<body>"`, plus delivery dedupe.
-  - `app.py`: the loop, run threads, webhook and operator routes.
+  - `app.py`: the loop, run threads, webhook and operator routes. `LiveDefinitions` merges the file with the API's definitions.
+  - `store.py`: API-created definitions (`definitions` table, schema v3). `merge` validates file + API as one set; a name in both is an error. API webhooks get a generated `whsec_` secret, returned only on create or rotate. A retired secret is journaled by SHA-256 fingerprint (`revocations.jsonl`) before the change commits, and `recovery.post_restore` clears matching secrets.
 - **`rules` aren't enforced:** they're text. Enforcement comes from agentd profiles and grants, room admission and rights, and loop guards.
 - **Worker handles** are `<name>-<run suffix>`, because a guest identity has at most one live invite.
 
