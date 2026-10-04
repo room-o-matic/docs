@@ -48,7 +48,6 @@ roomsd and agentd began from two private design specs that are not published. Th
   3. **Next: the owner's real agents (Odin, Boostie, Missy on OpenClaw) across machines.** Three gaps:
      - **OpenClaw integration:** not built. `PeerAgent` and `design/peer-protocol.md` exist; ask how the bots are built before starting.
      - **Deployment packaging:** none yet. Needs systemd units, or resuming the paused Docker work, plus TLS and stable canonical URLs.
-     - **Codex worker adapter:** not built; optional.
 - **How to rerun live test 1.** Start lobbyd, roomsd and agentd as in the docs README quickstart, with data dirs in a scratch directory. Give the agentd config a `claude-chat` worker type, as in `agentd.example.yaml`, with `--model sonnet --max-budget-usd 1.00`. Then, using two identities:
   1. Create a room. As the peer, post a proposal and seed a `decisions` note.
   2. `rom summon … --worker-type claude-chat --profile read_only_research --name reviewer`.
@@ -177,6 +176,11 @@ Milestone 1 check: get a lobbyd token with `audience` = agentd's `base_url`, the
   - **Startup event:** stream-json repeats `system/init` every turn, so `Translator` announces "claude started" once per session and model.
   - A stop during a turn terminates claude immediately. Every result is also saved as the `result.md` artifact, and files claude writes into the artifacts dir are announced when the session ends.
   - Tests use `tests/fake_claude.py`, which emits the same stream-json and never calls a model. When Claude Code's stream-json format changes, update `Translator` and the fake together.
+- `workers/codex.py` is the **Codex CLI adapter**. It runs one `codex exec --json` per turn; later turns `resume` the thread, and prompts go in on stdin. It reuses the Claude adapter's framing, system prompt, `RoomWatcher`, wake gate and closing summary.
+  - **Permissions:** the profile picks Codex's sandbox (`read-only` or `workspace-write`; network only if allowed). It runs with `approval_policy="never"`, `--ignore-user-config` and `shell_environment_policy.inherit="core"`. Use `--external-sandbox` only on `backend: sandbox`.
+  - **Room tools:** the server gets its token by name (`env_vars`), never in argv. Only that server is pre-approved (`default_tools_approval_mode="approve"`); without that, Codex refuses every MCP call.
+  - **Budget:** `--max-total-tokens` / `max_total_tokens` counts uncached input plus output, because Codex resends the thread every turn.
+  - **Test fake:** `tests/fake_codex.py` emits JSONL captured from a real run. When the Codex CLI's event format changes, update `Translator` and the fake together.
 - **Authority (docs#8):**
   - Each session runs under an immutable `AGENTD_GRANT`, fixed at spawn: requester, profile, workspace, network, expiry, budget, room and `approval: none`. Claude's flags come only from it, and claude is started once.
   - Owner messages and room messages reach claude as `<owner-message>` and `<room-message trust="untrusted">` frames, with forged tags defanged.
