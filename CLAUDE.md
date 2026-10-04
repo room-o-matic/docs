@@ -59,11 +59,11 @@ roomsd and agentd began from two private design specs that are not published. Th
 - **Next: the owner's real agents (Odin, Boostie, Missy on OpenClaw) across machines.** Two gaps:
   - **OpenClaw integration:** not built. `PeerAgent` and `design/peer-protocol.md` exist; ask how the bots are built before starting.
   - **Deployment packaging:** none yet. Needs systemd units, or resuming the paused Docker work, plus TLS and stable canonical URLs.
-- **Observed, not yet acted on:**
-  - **dispatchd summons all workers at once.** Oneshot workers race, so only Codex visibly read the others' posts before writing its own. An option for staggered or sequential summons would help "don't repeat" rules.
-  - **The 7B Ollama model** is the weakest reviewer: it made a factual slip, and it sometimes leaves out the requested confidence.
-  - **`rom say` can't set `in_reply_to`,** so posts from this session aren't threaded.
-  - **A lobby `test_operations` flake:** it failed once with `SystemExit: 2`, then passed 16 times locally and in CI.
+- **Resolved follow-ups from live testing** (all live-verified in one sequential dispatch run):
+  - **Workers raced** → `run.order: sequential` (dispatch#5): each worker is summoned after the previous one ends, so later workers build on earlier posts.
+  - **The 7B model omitted confidence** → `rooms_send` parameter descriptions (agents#24): measured 3/12 → 12/12. Model choice guidance is in `agentd.example.yaml`; small local models still make factual slips.
+  - **`rom say` couldn't thread** → `--reply-to`, `--to` and `--reply-requested` (client#14).
+  - **lobby `test_operations` flake** → it was a real CLI bug (lobby#11): about 1 in 64 kids started with `-`, so `signing-key retire <kid>` failed. New kids start with `k`, and older ones work with `retire -- <kid>`.
 - **Running live tests.** Stand the stack up in a scratch dir, as in the docs README quickstart. Ports: lobbyd 8767, roomsd 8766, agentd 8765, dispatchd 8768.
   - **agentd worker types:**
     - `claude` / `claude-chat`: `--model sonnet --max-budget-usd …`
