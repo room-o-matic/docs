@@ -12,14 +12,15 @@ There are three services: roomsd, agentd and lobbyd. All are Python/FastAPI MVPs
 | `agents/` | `agentd` | `agents/README.md` |
 | `lobby/`  | `lobbyd` | `lobby/README.md`, `design/multi-server.md` |
 | `client/` | `roomomatic` library + `rom` CLI | `client/README.md` |
+| `dispatch/` | `dispatchd` | `dispatch/README.md`, `design/dispatch.md` |
 
-**Repo layout:** five separate git repos in the `room-o-matic` GitHub org. This root directory (CLAUDE.md, `design/`) is `room-o-matic/docs`. `rooms/`, `agents/`, `lobby/` and `client/` are their own clones of the repos with those names, and the docs repo's `.gitignore` excludes them. Run git commands inside the repo whose files you changed, and commit to each repo separately.
+**Repo layout:** six separate git repos in the `room-o-matic` GitHub org (plus `.github` for the org profile). This root directory (CLAUDE.md, `design/`) is `room-o-matic/docs`. `rooms/`, `agents/`, `lobby/`, `client/` and `dispatch/` are their own clones of the repos with those names, and the docs repo's `.gitignore` excludes them. Run git commands inside the repo whose files you changed, and commit to each repo separately.
 
 **CI:** every code repo runs `.github/workflows/ci.yml` on PRs and on pushes to `main`: `uv sync --locked`, `ruff check`, `ruff format --check`, `pytest`. Work arrives as issues in `room-o-matic/docs`, and each is fixed by a PR in the affected repo(s) whose body says `Fixes room-o-matic/docs#N`. PRs merge (squash) once CI passes.
 
 **Cross-service check:** `cd client && uv run python scripts/e2e.py` starts real lobbyd, roomsd and agentd from the sibling checkouts on free ports and runs the whole flow through the client library and CLI (`ROM_E2E_KEEP=1` keeps the logs). Run it after changing anything that crosses a service boundary; each service's unit tests use fakes for the others.
 
-**Operations:** `design/operations.md` covers schema upgrades, backups, restore and its invalidation rules, `/readyz`, `/metrics`, and drills. `ops.py` is identical in lobby, rooms and agents (as is `verify.py`, apart from its header): change one, copy it to the others.
+**Operations:** `design/operations.md` covers schema upgrades, backups, restore and its invalidation rules, `/readyz`, `/metrics`, and drills. `ops.py` is identical in lobby, rooms, agents and dispatch (as is `verify.py`, apart from its header): change one, copy it to the others.
 
 roomsd and agentd began from two private design specs that are not published. The implemented behavior is documented in each repo's README, in this file, and in `design/`, and the code and tests are authoritative. `design/multi-server.md` covers identity, room URLs and discovery across servers.
 
@@ -51,6 +52,7 @@ roomsd and agentd began from two private design specs that are not published. Th
     - told to "wait", Codex polled inside its turn. The shared instructions now forbid that, backed by `--max-turn-seconds`.
   - **Mixed room test:** done. This Claude Code session (posting through `rom` as `claude-session@local`), a Claude worker and a Codex worker shared a room. The owner asked a question, and both workers answered it threaded within seconds.
   - **Ollama worker** (agents#22): done; live-verified with Ollama 0.10.1 and `qwen2.5:7b-instruct-q4_K_M` on this machine's 6 GB GTX 1660 SUPER, at no cost. The 7B model needed the small-model guards: it posted a message three times, and it sent `to` as a string.
+  - **dispatchd** (room-o-matic/dispatch #1–#3, built 2026-10-04): scheduled and webhook-triggered rooms. Its e2e runs against real services with the fake worker; there has been no live run with real models yet.
   3. **Then: the owner's real agents (Odin, Boostie, Missy on OpenClaw) across machines.** Two gaps:
      - **OpenClaw integration:** not built. `PeerAgent` and `design/peer-protocol.md` exist; ask how the bots are built before starting.
      - **Deployment packaging:** none yet. Needs systemd units, or resuming the paused Docker work, plus TLS and stable canonical URLs.
@@ -260,13 +262,33 @@ uv run rom --help
   - `watch` polls `/v1/me/updates` on each server. Its "from now" cursor is resolved when `watch()` is called, not on first iteration.
 - Service API changes need matching updates here, in the FakeWorld fakes, and in `scripts/e2e.py`.
 
+## dispatchd commands and layout (run from `dispatch/`)
+
+```bash
+uv sync && uv run pytest -q
+uv run python scripts/e2e.py              # real lobbyd + roomsd + agentd from the siblings
+export DISPATCHD_CONFIG=dispatch.yaml DISPATCHD_DATA_DIR=.data LOBBYD_URL=… DISPATCHD_LOBBYD_API_KEY=…
+uv run dispatchd check-config | serve | schedules | run <schedule> | runs | backup …
+```
+
+- **What it is:** scheduled and webhook-triggered rooms. dispatchd is an ordinary agent identity using the `roomomatic` client, never part of lobbyd, which calls nobody. Its power is bounded by agentd's caller grant for it and by room rights. The design is in `design/dispatch.md`.
+- **Modules:**
+  - `config.py`: templates (the restriction), schedules and webhooks. Strict: unknown keys are rejected.
+  - `runner.py`: the run lifecycle. Each step is recorded, so a resumed run never duplicates; summons use `operation_id=<run>.<worker>` and offers use `offer_id=<run>.<agent>`.
+  - `scheduler.py`: no fire on first sight; `schedule_state.spec` triggers recompute after an edit; a missed fire beyond `catch_up` is skipped.
+  - `hooks.py`: HMAC over `"<ts>.<body>"`, plus delivery dedupe.
+  - `app.py`: the loop, run threads, webhook and operator routes.
+- **`rules` aren't enforced:** they're text. Enforcement comes from agentd profiles and grants, room admission and rights, and loop guards.
+- **Worker handles** are `<name>-<run suffix>`, because a guest identity has at most one live invite.
+
 ## How the services relate
 
-Dependencies run one way: roomsd, agentd and agents call lobbyd; agentd and its workers call roomsd; **lobbyd calls nobody, and roomsd never calls agentd**. Agents normally go through the `roomomatic` client, which calls all three.
+Dependencies run one way: roomsd, agentd and agents call lobbyd; agentd and its workers call roomsd; dispatchd calls all three as an ordinary agent identity; **lobbyd calls nobody, and roomsd never calls agentd**. Agents normally go through the `roomomatic` client, which calls all three.
 
 - **roomsd**: peer collaboration. Independent agents (Boostie, Missy, Claude, Odin, …) that already exist share durable rooms. It **never** spawns or schedules agents, makes model calls, runs tools for agents, or decides who is right. A room holds a chat log of typed messages, notes (blackboard state), tasks with lease-based claims, an artifact index, and a decision log.
 - **agentd**: worker orchestration. An always-on gateway that lazily spawns ephemeral helper workers (process at first, Docker later). Callers talk to a *session*, not a shell process. It owns lifecycle: spawn, message, SSE events, status, stop, idle and hard-timeout cleanup.
 - **lobbyd**: identity issuer plus directory of roomsd servers, agentd instances and listed rooms. It never sees messages or sessions.
+- **dispatchd**: opens rooms on a schedule or a signed webhook: it creates the room, brings in workers and peers under a template's restrictions, sets the goal, waits, and archives.
 
 ## roomsd: key invariants
 

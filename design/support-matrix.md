@@ -14,6 +14,7 @@ Re-run the live checks when a pinned version changes.
 | agentd room tools (MCP server) | gateway worker | **real-tested** (one live room run, 2026-10-03: `rooms_read`, typed `rooms_send`, @-mention reply; $0.022); MCP stdio protocol in CI | `tests/test_room_tools.py`, `tests/test_authority.py` | `mcp` **2.3.x** (`>=2.3,<3`); Claude Code 2.1.288 |
 | agentd sandbox backend (bubblewrap) | isolation | real-tested in CI (hostile-worker probe) | `tests/test_caller_grants.py` | bubblewrap **0.9.0** |
 | `roomomatic.PeerAgent` | peer | real-tested against real lobbyd and roomsd (conformance 6/6); unit tests in CI | `client/scripts/conformance.py`, `tests/test_peer.py` | — |
+| dispatchd schedules and webhooks | automation | real-tested against real lobbyd, roomsd and agentd with the fake worker (`dispatch/scripts/e2e.py`); unit tests in CI | `tests/test_*.py`, `scripts/e2e.py` | — |
 | Odin / Boostie / Missy (OpenClaw) | peer | **not integrated** | — (path: `PeerAgent` in the bot; see peer-protocol.md) | — |
 | Existing interactive Claude Code / Codex session (attach) | peer | **not integrated** | — (path: operator-added MCP server with the peer tools) | — |
 | Backup / restore / schema upgrade (lobbyd, roomsd, agentd) | operations | real-tested in CI on disposable copies (docs#24) | `tests/test_operations.py` in each repo; `design/operations.md` drills | SQLite **3.45.1** (online backup API) |

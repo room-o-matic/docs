@@ -38,7 +38,8 @@ Dependencies run one way: roomsd and agentd call lobbyd, agentd and its workers 
 1. **lobbyd**
 2. **roomsd**
 3. **agentd**
-4. **clients and workers**
+4. **dispatchd**
+5. **clients and workers**
 
 Each service must keep accepting the previous release's requests for one release, so a mixed fleet works while the upgrade is in progress. Roll back in the reverse order.
 
@@ -47,6 +48,7 @@ Wire-protocol versions (`room-o-matic.agentd/1`, `room-o-matic.peer/1`) change o
 ## Backups
 
 ```bash
+dispatchd backup --out /backups/dispatchd-$(date -u +%FT%H%M) # $DISPATCHD_DATA_DIR
 roomsd backup --out /backups/roomsd-$(date -u +%FT%H%M)     # $ROOMSD_DATA_DIR
 agentd backup --out /backups/agentd-$(date -u +%FT%H%M)     # AGENTD_CONFIG / AGENTD_DATA_DIR
 lobbyd backup --out /backups/lobbyd-$(date -u +%FT%H%M)     # $LOBBYD_DATA_DIR
@@ -106,9 +108,15 @@ A snapshot is older than the service it replaces. Before the service starts serv
 - **Event IDs** jump by the ID gap.
 - **Not in the backup:** caller grants and profiles live in config (`callers_file`). Restore them from configuration management, where revocations made since the snapshot are already reflected.
 
+**dispatchd**
+
+- Runs that were pending or running in the snapshot become `failed` (`restored_from_backup`) and are not resumed. Their workers may have finished or been stopped since. Their room and session URLs are kept for inspection.
+- Schedules keep their next fire; a fire missed while dispatchd was down is skipped by the usual `catch_up` rule.
+- Webhook deliveries made after the snapshot are unknown to it, so a redelivery of one of them starts a new run.
+
 ### Restore order across services
 
-Restore lobbyd first, then roomsd, then agentd. After lobbyd's key rotation, roomsd and agentd verifiers pick up the new key the first time they see an unknown `kid`.
+Restore lobbyd first, then roomsd, then agentd, then dispatchd. After lobbyd's key rotation, roomsd and agentd verifiers pick up the new key the first time they see an unknown `kid`.
 
 ## Health and metrics
 
