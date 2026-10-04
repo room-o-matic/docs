@@ -16,6 +16,7 @@ Several agents run on their own: a Discord bot, a Claude Code session, an OpenCl
 | [`rooms`](https://github.com/room-o-matic/rooms) | **roomsd** | Durable rooms: typed messages, shared notes with revisions, lease-fenced tasks, invites, membership and rights. Never spawns or calls agents. |
 | [`agents`](https://github.com/room-o-matic/agents) | **agentd** | On-demand agent gateway: spawns sessionful helper workers (process or bubblewrap sandbox) under server-side profiles, streams their events, and can invite them into a room. |
 | [`client`](https://github.com/room-o-matic/client) | **roomomatic** | Python client library and `rom` CLI over all three, including `summon`, a durable `Watcher`, and `PeerAgent`. |
+| [`dispatch`](https://github.com/room-o-matic/dispatch) | **dispatchd** | Scheduled and webhook-triggered rooms: creates a room, summons workers and offers work to peers under a template's restrictions, sets the goal, archives afterwards. |
 | `docs` (this repo) | — | Design documents, protocol schemas, operations guide and the issue tracker for the whole project. |
 
 ```
@@ -30,14 +31,14 @@ Several agents run on their own: a Discord bot, a Claude Code session, an OpenCl
                       (spawns workers)
 ```
 
-Dependencies run one way. roomsd, agentd and agents call lobbyd; agentd and its workers call roomsd. **lobbyd calls nobody, and roomsd never calls agentd.**
+Dependencies run one way. roomsd, agentd and agents call lobbyd; agentd and its workers call roomsd; dispatchd acts as an ordinary agent identity, calling all three. **lobbyd calls nobody, and roomsd never calls agentd.**
 
 ## Quickstart (one machine)
 
 You need Python 3.12 and [uv](https://docs.astral.sh/uv/). Clone the four code repos side by side:
 
 ```bash
-for r in lobby rooms agents client; do git clone https://github.com/room-o-matic/$r; done
+for r in lobby rooms agents client dispatch; do git clone https://github.com/room-o-matic/$r; done
 ```
 
 **1. lobbyd** issues identities and approves the service endpoints:
@@ -91,6 +92,7 @@ Real agents, such as the Claude Code adapter, are added as `worker_types` in age
 | [`design/multi-server.md`](design/multi-server.md) | Identity, room URLs, tokens and discovery across several servers |
 | [`design/peer-protocol.md`](design/peer-protocol.md) | The v1 protocol an independent named agent speaks (offers, rooms, tools) |
 | [`design/protocol/peer-tools.v1.json`](design/protocol/peer-tools.v1.json) | Machine-readable peer tool schemas |
+| [`design/dispatch.md`](design/dispatch.md) | Scheduled and webhook-triggered rooms: the trust model, templates as restrictions, the run lifecycle, webhook signing |
 | [`design/operations.md`](design/operations.md) | Schema upgrades, backups, restore rules, `/readyz`, `/metrics`, drills |
 | [`design/support-matrix.md`](design/support-matrix.md) | Which integrations are real-tested, fake-only or not integrated |
 | [`CLAUDE.md`](CLAUDE.md) | Architecture and invariants for contributors and coding agents |
