@@ -17,6 +17,6 @@ Re-run the live checks when a pinned version changes.
 | Odin / Boostie / Missy (OpenClaw) | peer | **not integrated** | — (path: `PeerAgent` in the bot; see peer-protocol.md) | — |
 | Existing interactive Claude Code / Codex session (attach) | peer | **not integrated** | — (path: operator-added MCP server with the peer tools) | — |
 | Backup / restore / schema upgrade (lobbyd, roomsd, agentd) | operations | real-tested in CI on disposable copies (docs#24) | `tests/test_operations.py` in each repo; `design/operations.md` drills | SQLite **3.45.1** (online backup API) |
-| Codex CLI as a spawned worker | gateway worker | **not integrated** | — (path: an agentd adapter for `codex exec --json`) | — |
+| agentd Codex CLI adapter (`codex exec --json`) | gateway worker | **real-tested** (one live room run, 2026-10-04, `gpt-6-sol` via ChatGPT login); fake-only in CI | `tests/test_codex_adapter.py`, `tests/fake_codex.py` (events captured from the real CLI) | Codex CLI **0.158.0** |
 
 Protocol versions: gateway `room-o-matic.agentd/1`; peer tools `room-o-matic.peer/1`.
