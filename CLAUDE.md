@@ -71,9 +71,16 @@ roomsd and agentd began from two private design specs that are not published. Th
     - Every claim was checked against the files. Claude used Grep/Glob/Read only, confined by `--restricted`. Prefer Claude over the 7B Ollama model for knowledge-base answers.
   - **Recommended for real use:** `backend: sandbox` for these sessions. The process backend only sets the working directory; it doesn't confine a worker's own tools.
 - **Agents without the stack** (agents#28): `agentd ask <agent> <question>` and `agentd mcp` (tools `agents_list`, `agent_ask`) run a configured agent from a local agents file (`~/.config/agentd/agents.yaml`, `$AGENTD_AGENTS`; example `agents/agents.local.example.yaml`). No lobbyd, roomsd or agentd service, nothing in the background; each ask is a fresh worker, ended (whole process group) after its first answer. The owner asked for this: their own Claude asks agents, and nothing runs when unused.
-  - **Live-tested** with the Ollama knowledge-base agent and no services running: process backend (60 s) and sandbox (15 s). Claude via `agentd ask` isn't live-tested yet (paid).
+  - **Live-tested** with no services running:
+    - **Ollama knowledge-base agent:** process backend (60 s) and sandbox (15 s).
+    - **Claude, via the CLI:** the `nomad` agent gave the full revocation procedure from 8 cited files ($0.076, 17 s).
+    - **Claude, via the installed MCP tools in a real `claude -p` session:** the session listed the agents, picked `openvpn` and relayed a correct hub answer (outer session $0.095).
+    - **Confinement:** a probe confirmed `--restricted` refuses Read/Glob outside the workspace.
   - **Sandbox rule:** a model-backed worker needs `network: true` to reach its model; `network: false` unshares the network, so it can't even reach Ollama on localhost. With network on, `claude_tools: [Read, Grep, Glob]` keeps Claude read-only. Sandboxed Claude also needs credentials it can see (private HOME), e.g. `ANTHROPIC_API_KEY` in `env_allowlist`.
-  - **Not installed** in the owner's real config yet (no `~/.config/agentd/agents.yaml`, no `claude mcp add agents`).
+  - **Installed for the owner** (2026-10-05):
+    - **Agents file:** `~/.config/agentd/agents.yaml` (mode 600) defines `openvpn` and `nomad` (Claude Sonnet, $0.25 cap per ask) and `quick` (Ollama), all on `knowledge_read` over the `~/kb` clones, with `backend: process`.
+    - **MCP server:** user-scope `agents` in `~/.claude.json`, running `agents/.venv/bin/agentd mcp`. It runs from this checkout, so `git pull` plus `uv sync` in `agents/` updates it.
+  - **Counting leftover workers:** don't `ps | grep 'python.*-m agentd.workers'` from a command line that itself contains both strings; it matches its own shell.
 - **Next: the owner's real agents (Odin, Boostie, Missy on OpenClaw) across machines.** Postponed by the owner in favour of the Claude Code work above. Two gaps:
   - **OpenClaw integration:** not built. `PeerAgent` and `design/peer-protocol.md` exist; ask how the bots are built before starting.
   - **Deployment packaging:** none yet. Needs systemd units, or resuming the paused Docker work, plus TLS and stable canonical URLs.
