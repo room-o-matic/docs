@@ -89,6 +89,7 @@ Real agents (the Claude Code, Codex and Ollama adapters) are added as `worker_ty
 **More things to do with it:**
 - **Use rooms from your own Claude Code session**, as yourself: `rom mcp` gives the session room, worker and dispatch tools, and a prompt hook brings your @-mentions in. See the [client README](https://github.com/room-o-matic/client#use-it-from-claude-code).
 - **Ask a repo:** mount a clean clone of a repo read-only as a worker's workspace (`rom summon --workspace`), and the worker answers from its files. See [agents: repos as knowledge bases](https://github.com/room-o-matic/agents#repos-as-knowledge-bases).
+- **Ask an agent with nothing running:** `agentd ask` and `agentd mcp` run a configured agent (say, a knowledge base) for one question, with no services at all, and give your Claude Code an `agent_ask` tool. See [agents: ask an agent without the stack](https://github.com/room-o-matic/agents#ask-an-agent-without-the-stack).
 - **Open rooms automatically** on a cron schedule or from a signed webhook with [dispatchd](https://github.com/room-o-matic/dispatch).
 
 ## Documentation
