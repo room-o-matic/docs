@@ -15,7 +15,7 @@ Several agents run on their own: a Discord bot, a Claude Code session, an OpenCl
 | [`lobby`](https://github.com/room-o-matic/lobby) | **lobbyd** | Identity issuer (API keys → short-lived EdDSA access tokens, one audience per service), tenants, and the directory of roomsd servers, agentd instances, listed rooms, peers and offers. |
 | [`rooms`](https://github.com/room-o-matic/rooms) | **roomsd** | Durable rooms: typed messages, shared notes with revisions, lease-fenced tasks, invites, membership and rights. Never spawns or calls agents. |
 | [`agents`](https://github.com/room-o-matic/agents) | **agentd** | On-demand agent gateway: spawns sessionful helper workers (process or bubblewrap sandbox) under server-side profiles, streams their events, and can invite them into a room. |
-| [`client`](https://github.com/room-o-matic/client) | **roomomatic** | Python client library and `rom` CLI over all three, including `summon`, a durable `Watcher`, and `PeerAgent`. |
+| [`client`](https://github.com/room-o-matic/client) | **roomomatic** | Python client library and `rom` CLI over all four services, including `summon`, a durable `Watcher`, `PeerAgent`, and `rom mcp` for using rooms from your own Claude Code session. |
 | [`dispatch`](https://github.com/room-o-matic/dispatch) | **dispatchd** | Scheduled and webhook-triggered rooms: creates a room, summons workers and offers work to peers under a template's restrictions, sets the goal, archives afterwards. |
 | `docs` (this repo) | — | Design documents, protocol schemas, operations guide and the issue tracker for the whole project. |
 
@@ -27,15 +27,16 @@ Several agents run on their own: a Discord bot, a Claude Code session, an OpenCl
                   │                 │         │
   agents / rom ───┼──► roomsd ◄─────┼─────────┼── invited workers
   (API key)       │   (rooms)       │         │
-                  └──► agentd ──────┘─────────┘
-                      (spawns workers)
+  dispatchd ──────┤                 │         │
+  (schedules,     └──► agentd ──────┘─────────┘
+   webhooks)          (spawns workers)
 ```
 
 Dependencies run one way. roomsd, agentd and agents call lobbyd; agentd and its workers call roomsd; dispatchd acts as an ordinary agent identity, calling all three. **lobbyd calls nobody, and roomsd never calls agentd.**
 
 ## Quickstart (one machine)
 
-You need Python 3.12 and [uv](https://docs.astral.sh/uv/). Clone the four code repos side by side:
+You need Python 3.12 and [uv](https://docs.astral.sh/uv/). Clone the five code repos side by side (dispatch is optional):
 
 ```bash
 for r in lobby rooms agents client dispatch; do git clone https://github.com/room-o-matic/$r; done
@@ -83,7 +84,12 @@ uv run rom session events "$SESSION" --follow
 uv run rom tail "$ROOM" --once
 ```
 
-Real agents, such as the Claude Code adapter, are added as `worker_types` in agentd's config; see [`agents/agentd.example.yaml`](https://github.com/room-o-matic/agents/blob/main/agentd.example.yaml).
+Real agents (the Claude Code, Codex and Ollama adapters) are added as `worker_types` in agentd's config; see [`agents/agentd.example.yaml`](https://github.com/room-o-matic/agents/blob/main/agentd.example.yaml).
+
+**More things to do with it:**
+- **Use rooms from your own Claude Code session**, as yourself: `rom mcp` gives the session room, worker and dispatch tools, and a prompt hook brings your @-mentions in. See the [client README](https://github.com/room-o-matic/client#use-it-from-claude-code).
+- **Ask a repo:** mount a clean clone of a repo read-only as a worker's workspace (`rom summon --workspace`), and the worker answers from its files. See [agents: repos as knowledge bases](https://github.com/room-o-matic/agents#repos-as-knowledge-bases).
+- **Open rooms automatically** on a cron schedule or from a signed webhook with [dispatchd](https://github.com/room-o-matic/dispatch).
 
 ## Documentation
 

@@ -14,7 +14,7 @@ roomsd and agentd were built assuming a single roomsd. Once there are several, f
 
 ## Shape
 
-Add a third service, **lobbyd**: the place you go to find rooms. The name is a proposal. lobbyd is both the **directory** and the **identity issuer**.
+Add a third service, **lobbyd**: the place you go to find rooms. lobbyd is both the **directory** and the **identity issuer**.
 
 ```text
             lobbyd  (identity issuer + directory)
@@ -45,7 +45,7 @@ Each roomsd serves `GET /.well-known/roomsd` with `{server_id, base_url, issuer,
   {"audience": "https://rooms-a.example"}
   ```
 
-  The response is a JWT (EdDSA) carrying `iss` (lobbyd URL), `sub` (`boostie@domain`), `aud` (the server URL), `scope` (`agent` | `agentd` | `roomsd`) and `exp` (about 15 minutes).
+  The response is a JWT (EdDSA) carrying `iss` (lobbyd URL), `sub` (`boostie@domain`), `aud` (the server URL), `scope` (`agent` | `agentd` | `roomsd`), `tenant` and `exp` (about 15 minutes). A fourth key scope, `service`, only anchors an approved endpoint for services such as dispatchd's operator API; it never exchanges tokens.
 - roomsd and agentd verify tokens locally against lobbyd's `/.well-known/jwks.json` (cached). They check `aud` equals their own URL and `exp`. The principal is `sub`. **The "identity comes from the token" rule is unchanged**; only the token format changes.
 - Restricting each token to one server (`aud`) matters even with one operator: a server that leaks or logs a token can't replay it anywhere else.
 - **Invite tokens stay as they are:** opaque, local to one roomsd, and limited to one room. They are capabilities for guests, not identities, and never go through lobbyd.
@@ -66,7 +66,7 @@ Each roomsd serves `GET /.well-known/roomsd` with `{server_id, base_url, issuer,
 
 ### 4. Following many rooms
 
-Add `GET /v1/me/updates?cursor=<n>&limit=` to roomsd. It returns new messages from every room the caller has joined on that server, plus the next cursor. `messages.id` is already one autoincrement across the whole server, so a single integer cursor per server works. An agent following rooms on M servers makes M requests per poll instead of one per room. `GET /v1/rooms` on each server (servers listed by lobbyd) answers "which rooms am I in?" No cross-server membership index is kept in v1.
+Add `GET /v1/me/updates?cursor=<n>&limit=` to roomsd. It returns new messages from every room the caller can read on that server (joined, or granted but not yet joined), plus the next cursor. `messages.id` is already one autoincrement across the whole server, so a single integer cursor per server works. An agent following rooms on M servers makes M requests per poll instead of one per room. `GET /v1/rooms` on each server (servers listed by lobbyd) answers "which rooms am I in?" No cross-server membership index is kept in v1.
 
 ## Failure behaviour
 
@@ -81,7 +81,7 @@ Add `GET /v1/me/updates?cursor=<n>&limit=` to roomsd. It returns new messages fr
 - lobbyds can share listed rooms (and optionally registries) with an allowlist of peers.
 - Room URLs and `name@domain` identities already work across operators.
 
-## Changes to existing code
+## Changes to existing code (all done)
 
 - **roomsd:**
   - Accept lobbyd JWTs for `agent` scope; keep local invite tokens.
@@ -98,5 +98,5 @@ Add `GET /v1/me/updates?cursor=<n>&limit=` to roomsd. It returns new messages fr
 ## Open questions
 
 - Access token lifetime: 15 minutes trades revocation speed against how long lobbyd can be down.
-- Shared code: JWT verification and the registry heartbeat client would be repeated in three repos. Copy them for now, and extract a small `room-o-matic/common` package if they drift.
+- Shared code: `verify.py` and `ops.py` are copied, identical, into every service. Extract a small `room-o-matic/common` package only if the copies start to drift.
 - Whether lobbyd should eventually keep a cross-server membership index (`GET /v1/me/rooms`), or clients keep querying each server.
