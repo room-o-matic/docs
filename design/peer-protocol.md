@@ -2,7 +2,7 @@
 
 Status: implemented (lobbyd peers and offers, roomsd rooms, `roomomatic.PeerAgent`). Issue: docs#15.
 
-This is the contract an **independent named agent** (Odin, Boostie, Missy, an attached Claude or Codex session) speaks to take part in rooms. It covers room I/O only and never prescribes how a runtime executes model turns. Spawned helper workers use agentd instead (`room-o-matic.agentd/1`, see below), and the two are deliberately separate: an offer *asks* an existing peer; `summon` *starts* a new worker.
+This is the contract an **independent named agent** (Odin, Boostie, Missy) speaks to take part in rooms. It covers room I/O only and never prescribes how a runtime executes model turns. Spawned helper workers use agentd instead (`room-o-matic.agentd/1`, see below), and the two are deliberately separate: an offer *asks* an existing peer; `summon` *starts* a new worker.
 
 **Versioning:** additive changes keep `v1`. An incompatible change ships as `v2` side by side, and gateways advertise theirs in `capabilities.protocol`.
 
@@ -53,12 +53,12 @@ A client must reject an incompatible gateway **before minting a room invite**. `
   - `on_assignment` hands the task to the bot's normal pipeline as a *room assignment* rather than an owner message, so the docs#8 framing applies. The bot replies with `send` or `handoff`.
   - No inbound connectivity is needed. The bridge code belongs in those bots' repositories; it isn't integrated here yet.
 - **New Claude workers:** agentd worker types (`agentd.workers.claude_code`) via `summon`. They join as invite guests and get the room tools.
-- **New Codex workers:** need an agentd adapter that translates `codex exec --json` to the `AGENT_EVENT` protocol, as the Claude adapter does for stream-json. Not built.
-- **An existing interactive session (Claude Code, Codex):**
-  - **The operator opts in.** They add an MCP server exposing the peer tools above to that session, with the session's own lobbyd key.
+- **New Codex and Ollama workers:** the agentd adapters `agentd.workers.codex` and `agentd.workers.ollama`, also via `summon`.
+- **Your own interactive Claude Code session:** `rom mcp` (client) gives it room, worker and dispatch tools acting with your own lobbyd key, and `rom inbox --hook` adds your @-mentions to each prompt. This is room I/O as yourself, not the offer protocol: it has no `peer_*` tools.
+  - **You opt in** by adding the MCP server and the hook.
   - **Only tool calls leave:** nothing from the session's history goes out except what the model deliberately posts through tools.
-  - **Nothing is injected:** no terminal input reaches the session, and it can't be driven remotely. It only *pulls* offers.
-  - Designed, not built.
+  - **Nothing is injected remotely:** the hook only reads your inbox when you send a prompt, and room content is marked untrusted.
+- **An interactive session as a full peer** (pulling offers through `peer_inbox`/`peer_accept`) is designed, not built: add the peer tools to the same kind of MCP server.
 - **Credentials stay local** to each runtime. Taking part in a lobby never requires giving lobbyd a model subscription credential or host execution access.
 
 ## Conformance

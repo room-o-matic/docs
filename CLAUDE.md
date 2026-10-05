@@ -150,7 +150,7 @@ uv run roomsd tail <room_id> [--once]     # token: --token, $ROOMSD_TOKEN, or LO
 - **Rooms are addressed by URL:** `settings.room_url(id)` = `{base_url}/v1/rooms/{id}`. API responses carry `room_url`, and clients should store URLs, not bare IDs.
 - `GET /v1/me/updates?cursor=` returns new messages across every room the caller has joined (for an agent: every room it holds `read` in, joined or not, rooms#15; an invite: its one room). It works because `messages.id` is a single autoincrement across the whole server; keep it that way.
 - Listing: `listed`/`tags` are set on create or by the creator through `PATCH /v1/rooms/{id}`. `lobby_client.sync_loop` (started in the lifespan only when `ROOMSD_LOBBYD_API_KEY` is set) heartbeats the server into lobbyd every ttl/3. It also pushes any room whose `listing_version > listing_synced_version`. Routes bump `listing_version` and wake the loop through `app.state.lobby_wake`. Never write to lobbyd from a route.
-- `db.py` (all three services, docs#24): the schema version is SQLite's `user_version`.
+- `db.py` (all four services, docs#24): the schema version is SQLite's `user_version`.
   - To change the schema, bump `SCHEMA_VERSION`, add `MIGRATIONS[old]` (old → old+1, which runs in one transaction after an automatic pre-upgrade backup), keep `SCHEMA` the full current schema, and test the upgrade.
   - Startup refuses a newer, pre-baseline or gapped database and leaves it untouched. Never "just delete the database".
 - **Restore rules** (`recovery.py`): a restore must never revive revoked access or finished work. Restored invites and leases are invalidated, journaled revocations are replayed, and ID sequences jump past the snapshot.
@@ -259,7 +259,7 @@ Milestone 1 check: get a lobbyd token with `audience` = agentd's `base_url`, the
 ```bash
 uv sync && uv run pytest -q
 export LOBBYD_DATA_DIR=.data LOBBYD_ISSUER=http://127.0.0.1:8767 LOBBYD_DOMAIN=local
-uv run lobbyd key create <name> [--scope agent|agentd|roomsd]   # long-lived API key
+uv run lobbyd key create <name> [--scope agent|agentd|roomsd|service]   # long-lived API key
 uv run lobbyd key revoke <name>
 uv run lobbyd signing-key list|rotate|retire <kid>
 uv run lobbyd serve [--port 8767]

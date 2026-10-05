@@ -19,9 +19,9 @@ Dependencies still run one way: dispatchd calls lobbyd, roomsd and agentd, and n
 A template fixes:
 
 - **The room:** admission (closed by default), listing (off by default), `max_hops`, message rate, and how long before the room is archived.
-- **Workers:** agentd `worker_type` and `profile`.
+- **Workers:** agentd `worker_type` and `profile`, and optionally a `workspace` (a directory on the agentd host, e.g. a repo used read-only as a knowledge base).
 - **Peers:** each one's rights and role.
-- **The run:** `max_duration` and the overlap policy.
+- **The run:** `max_duration`, the overlap policy, and `order` (`parallel`, or `sequential` so each worker builds on the previous one's posts).
 
 Schedules and webhooks name a template with `use:`.
 
@@ -40,7 +40,7 @@ The steps are the same for every trigger (`schedule`, `webhook`, `manual`). Each
 1. Create the room and apply its guards.
 2. Seed the `goal` and `restrictions` notes, and post the goal (topic `goal`). The post names the worker handles: each worker's name plus the run's short id, so overlapping runs never share a guest identity.
 3. Grant each peer its rights, then send its offer.
-4. Summon the workers.
+4. Summon the workers: all at once, or one after another with `order: sequential`.
 5. Wait for every worker session to end, or stop the rest at `max_duration`.
 6. Call `finalize_session` for any room cleanup agentd handed back.
 7. Mark the run `done` or `failed`. Archive the room after `archive_after`.

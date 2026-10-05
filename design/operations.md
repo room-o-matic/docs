@@ -1,6 +1,6 @@
 # Operations: upgrades, backups, restore and health
 
-This guide covers how to upgrade, back up, restore and monitor lobbyd, roomsd and agentd (room-o-matic/docs#24). All three use the same `ops.py`, which is identical in each repo, to version their schemas and run backups.
+This guide covers how to upgrade, back up, restore and monitor lobbyd, roomsd, agentd and dispatchd (room-o-matic/docs#24). All four use the same `ops.py`, which is identical in each repo, to version their schemas and run backups.
 
 ## Schema versions and upgrades
 
@@ -33,7 +33,7 @@ This guide covers how to upgrade, back up, restore and monitor lobbyd, roomsd an
 
 ### Cross-service upgrade order
 
-Dependencies run one way: roomsd and agentd call lobbyd, agentd and its workers call roomsd, and clients call all three. So upgrade in this order:
+Dependencies run one way: roomsd and agentd call lobbyd, agentd and its workers call roomsd, and dispatchd and clients call all three. So upgrade in this order:
 
 1. **lobbyd**
 2. **roomsd**
@@ -59,7 +59,7 @@ lobbyd backup --out /backups/lobbyd-$(date -u +%FT%H%M)     # $LOBBYD_DATA_DIR
 - **Self-verifying:** every backup has a `manifest.json` with a SHA-256 hash per file, the schema version and the snapshot start time. `verify-backup` re-checks every hash and runs `pragma integrity_check`.
 - **Private:** directories are `0700` and files `0600`. Backups contain API key hashes, invite and session metadata, room content and, for lobbyd, **private signing keys**. Encrypt them before they leave the host (for example `tar c DIR | age -r <recipient> > DIR.tar.age`), and keep the decryption key separate from the backups.
 - **Retention:** keep at least the last pre-upgrade backup of each service, plus daily backups for as long as you'd want to roll back. 14 days is a reasonable default. Prune older ones yourself; services never delete backups.
-- **Revocation journal:** the journal is *not* in the backup. Each service appends access removals to `revocations.jsonl` (`ROOMSD_REVOCATION_JOURNAL`, `LOBBYD_REVOCATION_JOURNAL`). Put it on a different volume, or ship it off-host, so it survives losing the data dir. A restore replays it.
+- **Revocation journal:** the journal is *not* in the backup. Each service appends access removals to `revocations.jsonl` (`ROOMSD_REVOCATION_JOURNAL`, `LOBBYD_REVOCATION_JOURNAL`, `DISPATCHD_REVOCATION_JOURNAL`). Put it on a different volume, or ship it off-host, so it survives losing the data dir. A restore replays it.
 
 ## Restore
 
@@ -113,6 +113,8 @@ A snapshot is older than the service it replaces. Before the service starts serv
 - Runs that were pending or running in the snapshot become `failed` (`restored_from_backup`) and are not resumed. Their workers may have finished or been stopped since. Their room and session URLs are kept for inspection.
 - Schedules keep their next fire; a fire missed while dispatchd was down is skipped by the usual `catch_up` rule.
 - Webhook deliveries made after the snapshot are unknown to it, so a redelivery of one of them starts a new run.
+- **Webhook secrets:** an API-created webhook secret retired since the snapshot (rotated, or its webhook deleted) is journaled by fingerprint and cleared again. That webhook answers 503 until an operator rotates its secret.
+- API-created templates, schedules and webhooks are kept as of the snapshot.
 
 ### Restore order across services
 
@@ -131,6 +133,7 @@ Each service serves:
 | lobbyd | database writable, schema version, free disk ≥ `min_free_bytes`, at least one active signing key | live registrations, expired leases, open offers, pending keys |
 | roomsd | database, schema, disk, JWKS not failing closed | lobbyd sync age, failures and pending listings (rooms work without the directory) |
 | agentd | database, schema, disk, JWKS, no orphaned sessions (active in the DB without a live worker) | registry heartbeat age and failures, owed room finalizations |
+| dispatchd | database, the config (the last edit is valid), the scheduler loop | runs by state, webhook volume, scheduler health |
 
 Alert on any of these:
 
@@ -150,7 +153,7 @@ Run upgrade and restore drills **only on disposable copies**. Never point a dril
 3. Check `/readyz`, then spot-check the data: the latest message ID, a note's history, session statuses, `signing-key list`.
 4. Keep `restore-reports/*.json` as evidence. It records the recovery time and integrity result.
 
-Each repo's `tests/test_operations.py` runs these drills in CI on temporary copies. They cover:
+Each service's operations tests (`tests/test_operations.py`; `tests/test_recovery.py` in dispatch) run these drills in CI on temporary copies. They cover:
 
 - upgrades: ordered migrations, rollback on failure, refusals of unsupported schemas
 - backups under concurrent writes, plus tamper detection
