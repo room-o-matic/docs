@@ -29,14 +29,22 @@ roomsd and agentd began from two private design specs that are not published. Th
 > - default rooms to `closed` (`ROOMSD_DEFAULT_ADMISSION=closed`);
 > - grant agentd callers explicitly, and run any untrusted caller on `backend: sandbox`.
 
-## Current state (2026-10-04)
+## Current state (2026-10-21)
 
 - **Repos:** docs, lobby, rooms, agents, client, dispatch and `.github` are all public under Apache-2.0.
   - **On every repo:** secret scanning, push protection, private vulnerability reporting, and auto-delete of merged branches.
   - **`main` is protected:** no force-push or deletion anywhere, and the five code repos also require the `test` CI check.
   - **`room-o-matic/.github`** holds the org profile, SECURITY.md, CONTRIBUTING.md, templates and brand assets. `assets/make.py` regenerates the images, including one social preview per repo.
   - **Commit as** `91579462+TargetedEntropy@users.noreply.github.com`, never a personal email.
-- **Issue tracker:** empty; docs#1–#24 are done. The original design gists are private and must not be linked.
+- **Issue tracker:** empty, and no open PRs anywhere; docs#1–#24 are done. The original design gists are private and must not be linked.
+- **Last activity:** 2026-10-05. Latest PRs:
+  - agents#28–#30: standalone asks, full answers, README;
+  - docs#51–#55: the docs pass and the standalone-ask notes;
+  - the README pass in every code repo;
+  - the org profile.
+
+  READMEs, repo descriptions, topics and the org profile were all brought up to date then. Nothing changed between 2026-10-05 and 2026-10-21.
+- **Claude Code is now 2.1.306 on this machine** (2026-10-21). Live tests ran on 2.1.288 and 2.1.289. Re-run a cheap live check before relying on the adapter if its stream-json output looks different.
 - **Worker adapters, all live-verified on this machine:**
 
   | adapter | module | verified with | PRs |
@@ -64,6 +72,8 @@ roomsd and agentd began from two private design specs that are not published. Th
   - **Not yet installed** in the owner's real Claude Code config: so far it's only been run in scratch projects.
 - **Repos as knowledge bases** (client#17, dispatch#9, agents#25): `summon(workspace_path=)`, `rom summon --workspace`, MCP `worker_summon(workspace=)` and a dispatch worker's `workspace:` mount a directory on the agentd host, read-only under a `knowledge_read` profile. Summon skips an agentd that refuses the directory. The owner's candidates are `~/git/nomad_consul` and `~/git/openvpn`; don't modify them. `nomad_consul`'s working tree holds live cluster secrets (gitignored `secrets/`, `pki/`, `cluster.env`), so mount only a clean `git clone` of it, never the checkout.
   - **Clones live in `~/kb/openvpn` and `~/kb/nomad_consul`** (`/srv` is root-owned). Refresh them with `git -C ~/kb/<repo> pull`. Their committed files were scanned and hold no secrets; two UUID hits were a token *accessor* ID and an infrastructure note.
+    - **The clones don't refresh themselves.** On 2026-10-21 `~/kb/nomad_consul` was 2 commits behind the owner's repo (Node B headroom; `verify.sh` never reporting success without running checks), so its agent answered from older docs. Pull before an ask where freshness matters.
+  - **A bug found in the owner's repo, reported but not fixed (we don't modify those repos):** in `nomad_consul/pki/20-issue-friend.sh`, `p12-password.txt` is written into `pki/issued/<friend>/` (line 80), and that whole directory is tarred into the friend bundle (line 122). The password therefore travels inside the bundle it is meant to protect. The commits up to 2026-10-21 don't touch it.
   - **Live-tested with Ollama** through `rom summon --workspace` and a dispatch template's `workspace:`. The original checkout and paths outside the roots were refused. The 7B model invented scripts until agents#26 added `search_files`, a first-turn orientation, a guard against invented file names and an empty-reply retry. It now cites real files, but its detail is unreliable. Use Claude for knowledge-base answers that matter (below).
   - **Live-tested with Claude (Sonnet, CLI 2.1.289):** both questions were answered correctly and fully grounded, for $0.068 and $0.080.
     - **openvpn:** Botrick is the preferred hub at 10.89.0.1/24 on `tun-botrick`; Boostie is the standby at 10.90.0.1/24, with hub-to-hub address 10.89.0.5. It cited line numbers.
